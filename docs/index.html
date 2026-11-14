@@ -85,6 +85,8 @@
   .btn:hover { filter: brightness(1.08); transform: translateY(-1px); box-shadow: 0 12px 28px -10px var(--indigo); }
   .btn:hover svg { transform: translateY(2px); }
   .meta { font-size: 13px; color: var(--muted); margin-top: 12px; }
+  .meta a { color: var(--indigo); text-decoration: none; white-space: nowrap; }
+  .meta a:hover { text-decoration: underline; }
 
   .frame { display: block; width: 100%; height: auto; color: var(--text); }
   .flow { stroke-dasharray: 4 6; animation: flow 1s linear infinite; }
@@ -132,6 +134,24 @@
   footer a { color: var(--muted); text-decoration: none; margin-left: 18px; }
   footer a:hover { color: var(--indigo); }
 
+  [hidden] { display: none !important; }
+  .versions { list-style: none; margin: 0; padding: 0; }
+  .ver { display: grid; grid-template-columns: 1fr auto; align-items: center; gap: 8px 20px; padding: 11px 0; border-top: 1px solid var(--line); font-size: 15px; }
+  .ver:last-child { border-bottom: 1px solid var(--line); }
+  .vinfo { display: flex; flex-wrap: wrap; align-items: center; gap: 4px 10px; }
+  .vinfo b { font-weight: 650; font-variant-numeric: tabular-nums; }
+  .vinfo .muted { color: var(--muted); font-size: 14px; }
+  .tag { font-size: 12px; font-weight: 600; padding: 1px 8px; border-radius: 999px; background: var(--green-soft); color: var(--green); }
+  .tag.pre { background: var(--amber-soft); color: var(--amber); }
+  .vact { display: flex; gap: 16px; align-items: center; }
+  .vact .get { color: var(--indigo); font-weight: 600; text-decoration: none; }
+  .vact .notes { color: var(--muted); font-size: 14px; text-decoration: none; }
+  .vact a:hover { text-decoration: underline; }
+  .vmsg { color: var(--muted); font-size: 15px; padding: 11px 0; border-top: 1px solid var(--line); border-bottom: 1px solid var(--line); }
+  .vmsg a { color: var(--indigo); }
+  .more { margin-top: 14px; background: none; border: 1px solid var(--line); color: var(--text); border-radius: 999px; padding: 6px 16px; font: inherit; font-size: 14px; cursor: pointer; transition: border-color .2s; }
+  .more:hover { border-color: var(--muted); }
+
   /* Reveal on scroll (only when JS runs, so the page never stays hidden) */
   .js .reveal { opacity: 0; transform: translateY(14px); transition: opacity .6s ease, transform .6s ease; transition-delay: var(--d, 0s); }
   .js .reveal.in { opacity: 1; transform: none; }
@@ -164,6 +184,7 @@
     footer a { margin: 0 14px 0 0; }
   }
   @media (max-width: 560px) { .top nav .dl { display: none; } }
+  @media (max-width: 520px) { .top nav .nv { display: none; } }
 </style>
 </head>
 <body>
@@ -174,6 +195,7 @@
       <a href="#how">How it works</a>
       <a href="#needs">Requirements</a>
       <a href="#faq">FAQ</a>
+      <a class="nv" href="#versions">Versions</a>
       <a class="gh" href="https://github.com/Penca53/lancast">GitHub</a>
       <a class="dl" href="https://github.com/Penca53/lancast/releases/latest/download/lancast.exe">Download</a>
       <button class="theme" id="theme" type="button" aria-label="Switch between light and dark theme" title="Light / dark">
@@ -195,7 +217,7 @@
           <svg viewBox="0 0 20 20" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M10 3v10M5.5 8.5 10 13l4.5-4.5M4 17h12"/></svg>
           Download for Windows
         </a>
-        <p class="meta" id="meta">Free and open source · Windows 10 &amp; 11 · No installer</p>
+        <p class="meta"><span id="meta">Free and open source · Windows 10 &amp; 11 · No installer</span> · <a href="#versions">All versions ↓</a></p>
       </div>
     </div>
 
@@ -269,9 +291,17 @@
     </div>
   </section>
 
+  <section id="versions">
+    <div class="head reveal"><h2>All versions</h2><span><a href="https://github.com/Penca53/lancast/releases">Release notes on GitHub ↗</a></span></div>
+    <ul class="versions reveal" id="versions-list">
+      <li class="vmsg">Every version is on <a href="https://github.com/Penca53/lancast/releases">GitHub</a>.</li>
+    </ul>
+    <button class="more" id="more" type="button" hidden>Show older versions</button>
+  </section>
+
   <footer>
     <span>LanCast · Apache 2.0</span>
-    <span><a href="https://github.com/Penca53/lancast">Source</a><a href="https://github.com/Penca53/lancast/releases">Versions</a><a href="https://github.com/Penca53/lancast/issues">Report a problem</a></span>
+    <span><a href="https://github.com/Penca53/lancast">Source</a><a href="#versions">Versions</a><a href="https://github.com/Penca53/lancast/issues">Report a problem</a></span>
   </footer>
 </div>
 
@@ -310,11 +340,33 @@
     document.querySelectorAll(".reveal").forEach(show);
   }
 
-  // Latest version next to the button.
-  fetch("https://api.github.com/repos/Penca53/lancast/releases/latest").then(r => r.ok ? r.json() : null).then(rel => {
-    const exe = rel && (rel.assets || []).find(a => /\.exe$/i.test(a.name));
-    if (!exe) return;
-    document.getElementById("meta").textContent = "Version " + rel.tag_name.replace(/^v/, "") + " · " + (exe.size / 1048576).toFixed(1) + " MB · Windows 10 & 11 · No installer";
+  // Releases: the newest one next to the download button, and every one under "All versions".
+  const mb = a => (a.size / 1048576).toFixed(1) + " MB";
+  const day = d => new Date(d).toLocaleDateString(undefined, { year: "numeric", month: "short", day: "numeric" });
+  const esc = v => String(v).replace(/[&<>"']/g, c => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" }[c]));
+  fetch("https://api.github.com/repos/Penca53/lancast/releases?per_page=100").then(r => r.ok ? r.json() : Promise.reject()).then(all => {
+    const rels = all.filter(r => !r.draft)
+      .map(r => ({ r, exe: (r.assets || []).find(a => /\.exe$/i.test(a.name)) }))
+      .filter(x => x.exe);
+    if (!rels.length) return;
+    const latest = rels.find(x => !x.r.prerelease) || rels[0];
+    document.getElementById("meta").textContent =
+      "Version " + latest.r.tag_name.replace(/^v/, "") + " · " + mb(latest.exe) + " · Windows 10 & 11 · No installer";
+
+    const SHOW = 5;
+    const list = document.getElementById("versions-list");
+    list.innerHTML = rels.map((x, i) => {
+      const tag = x === latest ? '<span class="tag">Latest</span>' : x.r.prerelease ? '<span class="tag pre">Pre-release</span>' : "";
+      return `<li class="ver"${i >= SHOW ? " hidden" : ""}>
+        <div class="vinfo"><b>${esc(x.r.tag_name.replace(/^v/, ""))}</b>${tag}<span class="muted">${day(x.r.published_at)} · ${mb(x.exe)}</span></div>
+        <div class="vact"><a class="get" href="${esc(x.exe.browser_download_url)}">Download</a><a class="notes" href="${esc(x.r.html_url)}">Notes</a></div>
+      </li>`;
+    }).join("");
+    const more = document.getElementById("more");
+    if (rels.length > SHOW) {
+      more.hidden = false;
+      more.onclick = () => { list.querySelectorAll(".ver[hidden]").forEach(li => li.hidden = false); more.hidden = true; };
+    }
   }).catch(() => {});
 </script>
 </body>
