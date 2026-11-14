@@ -1,4 +1,4 @@
-# Push a version tag (e.g. `git tag v0.1.0 && git push origin v0.1.0`) to build
+# Push a version tag (e.g. `git tag v0.1.0 && git push origin v0.1.0`) to test, build
 # lancast.exe and publish it as a GitHub release. The website's download button
 # always points at the newest release's lancast.exe, so it never needs editing.
 name: Release
@@ -18,12 +18,27 @@ jobs:
       RUSTFLAGS: -C target-feature=+crt-static
     steps:
       - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+      - name: Unit tests
+        run: cargo test --release --locked
       - name: Build
         run: cargo build --release --locked
+      - name: Checksum
+        shell: pwsh
+        run: |
+          $hash = (Get-FileHash target/release/lancast.exe -Algorithm SHA256).Hash.ToLower()
+          "$hash  lancast.exe" | Out-File -Encoding ascii -NoNewline target/release/lancast.exe.sha256
       - name: Publish release
         shell: bash
         env:
           GH_TOKEN: ${{ github.token }}
         run: |
-          gh release create "$GITHUB_REF_NAME" target/release/lancast.exe \
-            --title "LanCast $GITHUB_REF_NAME" --generate-notes
+          cat > notes.md <<'EOF'
+          **[Download lancast.exe](https://github.com/Penca53/lancast/releases/download/${{ github.ref_name }}/lancast.exe)** for Windows 10 and 11 (64-bit). No installer: just run it.
+          New to LanCast? See the [website](https://penca53.github.io/lancast/) for a quick guide.
+
+          The first time you run it, Windows may say "Windows protected your PC" (LanCast isn't code-signed yet):
+          click **More info**, then **Run anyway**. When Windows Firewall asks, click **Allow** so your TV can reach your PC.
+          EOF
+          gh release create "$GITHUB_REF_NAME" target/release/lancast.exe target/release/lancast.exe.sha256 \
+            --title "LanCast $GITHUB_REF_NAME" --notes-file notes.md --generate-notes

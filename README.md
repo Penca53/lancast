@@ -1,5 +1,12 @@
 # LanCast
 
+[![CI](https://github.com/Penca53/lancast/actions/workflows/ci.yml/badge.svg)](https://github.com/Penca53/lancast/actions/workflows/ci.yml)
+[![Release](https://img.shields.io/github/v/release/Penca53/lancast?label=release)](https://github.com/Penca53/lancast/releases/latest)
+[![Downloads](https://img.shields.io/github/downloads/Penca53/lancast/total)](https://github.com/Penca53/lancast/releases)
+[![Platform](https://img.shields.io/badge/platform-Windows%2010%20%7C%2011-4f46e5)](https://penca53.github.io/lancast/)
+[![License](https://img.shields.io/github/license/Penca53/lancast)](LICENSE)
+[![Website](https://img.shields.io/badge/website-penca53.github.io%2Flancast-059669)](https://penca53.github.io/lancast/)
+
 Cast your whole PC screen (with audio) to a smart TV or any browser over the LAN, up to 4K60.
 Latency depends on what the receiving browser allows: ~20–60 ms where WebRTC or WebCodecs can
 display, ~0.12–0.26 s to playback on LG webOS 25 TVs (see below).
