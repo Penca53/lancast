@@ -78,10 +78,8 @@ fn main() -> anyhow::Result<()> {
                 settings.rate = config::RateControl::Cbr { kbps };
             }
             if let Some(c) = value("--codec") {
-                settings.codec = config::Codec::ALL
-                    .into_iter()
-                    .find(|k| k.name() == c)
-                    .with_context(|| format!("unknown codec {c:?} (h264, hevc, av1)"))?;
+                settings.codec =
+                    config::Codec::ALL.into_iter().find(|k| k.name() == c).with_context(|| format!("unknown codec {c:?} (h264, hevc, av1)"))?;
             }
             if let Some(p) = value("--player") {
                 settings.player = match p.as_str() {

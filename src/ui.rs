@@ -33,8 +33,7 @@ pub fn run() -> anyhow::Result<()> {
             )),
         ..Default::default()
     };
-    eframe::run_native("LanCast", options, Box::new(|cc| Ok(Box::new(App::new(engine, cc.egui_ctx.clone())))))
-        .map_err(|e| anyhow::anyhow!("{e}"))
+    eframe::run_native("LanCast", options, Box::new(|cc| Ok(Box::new(App::new(engine, cc.egui_ctx.clone()))))).map_err(|e| anyhow::anyhow!("{e}"))
 }
 
 enum Msg {
@@ -289,7 +288,8 @@ impl App {
                                 action = Some((d.ip.clone(), false));
                             }
                         } else if d.webos {
-                            let cast = egui::Button::new(RichText::new("Cast").strong().color(Color32::WHITE)).fill(ACCENT).min_size(egui::vec2(72.0, 28.0));
+                            let cast =
+                                egui::Button::new(RichText::new("Cast").strong().color(Color32::WHITE)).fill(ACCENT).min_size(egui::vec2(72.0, 28.0));
                             if ui.add_enabled(self.busy.is_none(), cast).clicked() {
                                 action = Some((d.ip.clone(), true));
                             }
@@ -373,7 +373,11 @@ impl App {
             ui.horizontal(|ui| {
                 ui.label(RichText::new("Works in any modern browser: TVs, phones, laptops.").weak().small());
                 ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
-                    if ui.small_button("Latency check").on_hover_text("Opens a big PC clock; turn on \"Stats on TV\" and compare it with the clock on the TV").clicked() {
+                    if ui
+                        .small_button("Latency check")
+                        .on_hover_text("Opens a big PC clock; turn on \"Stats on TV\" and compare it with the clock on the TV")
+                        .clicked()
+                    {
                         ui.ctx().open_url(egui::OpenUrl::new_tab(format!("http://127.0.0.1:{}/clock", self.engine.port)));
                     }
                 });

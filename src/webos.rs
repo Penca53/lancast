@@ -154,9 +154,7 @@ impl Session {
         if let Some(app) = previous.filter(|a| ![BROWSER, cast_app].contains(a)) {
             return self.launch(app);
         }
-        self.request("ssap://system.launcher/close", json!({ "id": cast_app }))
-            .map(drop)
-            .or_else(|_| self.launch("com.webos.app.home"))
+        self.request("ssap://system.launcher/close", json!({ "id": cast_app })).map(drop).or_else(|_| self.launch("com.webos.app.home"))
     }
 }
 

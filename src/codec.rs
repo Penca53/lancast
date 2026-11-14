@@ -271,10 +271,8 @@ fn hvcc_record(au: &[u8]) -> Option<Vec<u8>> {
     // min_spatial_segmentation 0, parallelism 0, chroma 4:2:0, 8-bit luma/chroma, avg rate 0.
     r.extend_from_slice(&[0xf0, 0x00, 0xfc, 0xfd, 0xf8, 0xf8, 0, 0]);
     r.push(layers << 3 | nested << 2 | 3); // 4-byte NAL lengths
-    let arrays: Vec<(u8, Vec<&[u8]>)> = [HEVC_VPS, HEVC_SPS, HEVC_PPS]
-        .into_iter()
-        .map(|t| (t, nal_units(au).filter(|n| hevc_type(n) == t).collect()))
-        .collect();
+    let arrays: Vec<(u8, Vec<&[u8]>)> =
+        [HEVC_VPS, HEVC_SPS, HEVC_PPS].into_iter().map(|t| (t, nal_units(au).filter(|n| hevc_type(n) == t).collect())).collect();
     if arrays.iter().any(|(_, nals)| nals.is_empty()) {
         return None;
     }

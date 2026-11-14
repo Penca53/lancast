@@ -240,7 +240,9 @@ fn supervise(e: &Engine) {
         }
         let wanted = last_viewer.elapsed() < LINGER;
         let stale = running.as_ref().is_some_and(|w| w.generation != generation);
-        if (!wanted || stale) && let Some(w) = running.take() {
+        if (!wanted || stale)
+            && let Some(w) = running.take()
+        {
             log::info!("stopping pipeline");
             w.stop();
         }

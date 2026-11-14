@@ -55,11 +55,9 @@ pub fn monitors() -> Vec<Monitor> {
 }
 
 fn adapter_for(factory: &IDXGIFactory1, monitor: HMONITOR) -> Option<IDXGIAdapter1> {
-    (0..).map_while(|i| unsafe { factory.EnumAdapters1(i) }.ok()).find(|a| {
-        (0..)
-            .map_while(|j| unsafe { a.EnumOutputs(j) }.ok())
-            .any(|o| unsafe { o.GetDesc() }.is_ok_and(|d| d.Monitor == monitor))
-    })
+    (0..)
+        .map_while(|i| unsafe { factory.EnumAdapters1(i) }.ok())
+        .find(|a| (0..).map_while(|j| unsafe { a.EnumOutputs(j) }.ok()).any(|o| unsafe { o.GetDesc() }.is_ok_and(|d| d.Monitor == monitor)))
 }
 
 impl Gpu {
@@ -91,7 +89,13 @@ impl Gpu {
         }
     }
 
-    pub fn texture(&self, width: u32, height: u32, format: windows::Win32::Graphics::Dxgi::Common::DXGI_FORMAT, bind: D3D11_BIND_FLAG) -> Result<ID3D11Texture2D> {
+    pub fn texture(
+        &self,
+        width: u32,
+        height: u32,
+        format: windows::Win32::Graphics::Dxgi::Common::DXGI_FORMAT,
+        bind: D3D11_BIND_FLAG,
+    ) -> Result<ID3D11Texture2D> {
         let desc = D3D11_TEXTURE2D_DESC {
             Width: width,
             Height: height,

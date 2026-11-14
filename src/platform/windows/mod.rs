@@ -123,7 +123,14 @@ fn capture_loop(cap: &capture::Capture, conv: &mut convert::Converter, slot: &La
     Ok(())
 }
 
-fn encode_loop(mut enc: Encoder, slot: &Latest<Frame>, hub: &Hub, stats: &Stats, codec: Codec, (w, h, fps, kbps): (u32, u32, u32, u32)) -> Result<()> {
+fn encode_loop(
+    mut enc: Encoder,
+    slot: &Latest<Frame>,
+    hub: &Hub,
+    stats: &Stats,
+    codec: Codec,
+    (w, h, fps, kbps): (u32, u32, u32, u32),
+) -> Result<()> {
     com_init();
     let mut config: Option<String> = None;
     let mut inflight: VecDeque<(u64, Instant)> = VecDeque::new();

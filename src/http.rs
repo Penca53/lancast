@@ -57,11 +57,8 @@ pub fn parse_head(text: &str) -> Option<Head> {
     let mut lines = text.lines();
     let mut first = lines.next()?.splitn(3, ' ').map(str::to_owned);
     let line = [first.next()?, first.next()?, first.next().unwrap_or_default()];
-    let headers = lines
-        .take_while(|l| !l.is_empty())
-        .filter_map(|l| l.split_once(':'))
-        .map(|(k, v)| (k.trim().to_owned(), v.trim().to_owned()))
-        .collect();
+    let headers =
+        lines.take_while(|l| !l.is_empty()).filter_map(|l| l.split_once(':')).map(|(k, v)| (k.trim().to_owned(), v.trim().to_owned())).collect();
     Some(Head { line, headers })
 }
 

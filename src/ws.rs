@@ -133,11 +133,7 @@ pub fn client_handshake<S: Read + Write>(s: &mut S, host: &str, path: &str) -> i
 /// Server side: answers the upgrade request described by `head`.
 pub fn server_handshake(w: &mut impl Write, head: &crate::http::Head) -> io::Result<()> {
     let key = head.header("sec-websocket-key").ok_or_else(|| io::Error::new(io::ErrorKind::InvalidData, "missing key"))?;
-    write!(
-        w,
-        "HTTP/1.1 101 Switching Protocols\r\nUpgrade: websocket\r\nConnection: Upgrade\r\nSec-WebSocket-Accept: {}\r\n\r\n",
-        accept_key(key)
-    )?;
+    write!(w, "HTTP/1.1 101 Switching Protocols\r\nUpgrade: websocket\r\nConnection: Upgrade\r\nSec-WebSocket-Accept: {}\r\n\r\n", accept_key(key))?;
     w.flush()
 }
 

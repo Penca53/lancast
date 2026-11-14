@@ -73,7 +73,11 @@ impl Pacer {
             for (data, to) in rx {
                 (sent, bytes) = (sent + 1, bytes + data.len() as u64);
                 if since.elapsed() >= Duration::from_secs(1) {
-                    log::debug!("pacer: {sent} datagrams, {:.1} Mbit/s to {to}, rate {} Mbit/s", bytes as f64 * 8e-6 / since.elapsed().as_secs_f64(), r.load(Ordering::Relaxed) * 8 / 1_000_000);
+                    log::debug!(
+                        "pacer: {sent} datagrams, {:.1} Mbit/s to {to}, rate {} Mbit/s",
+                        bytes as f64 * 8e-6 / since.elapsed().as_secs_f64(),
+                        r.load(Ordering::Relaxed) * 8 / 1_000_000
+                    );
                     (sent, bytes, since) = (0, 0, Instant::now());
                 }
                 // Virtual send clock: idle time earns at most BURST of credit.

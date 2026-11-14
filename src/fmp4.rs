@@ -26,10 +26,7 @@ fn full(kind: &[u8; 4], version: u8, flags: u32, parts: &[&[u8]]) -> Vec<u8> {
     bx(kind, &all)
 }
 
-const MATRIX: [u8; 36] = [
-    0, 1, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 1, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0,
-    0x40, 0, 0, 0,
-];
+const MATRIX: [u8; 36] = [0, 1, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 1, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0x40, 0, 0, 0];
 
 /// Initialization segment (ftyp + moov) for one video track; `config` is the codec's decoder
 /// configuration record (see [`codec::config_record`]).
@@ -42,12 +39,7 @@ pub fn init_segment(codec: Codec, config: &[u8], width: u16, height: u16) -> Vec
         0,
         &[&[0; 8], &TIMESCALE.to_be_bytes(), &[0; 4], &0x00010000u32.to_be_bytes(), &[1, 0], &[0; 10], &MATRIX, &[0; 24], &2u32.to_be_bytes()],
     );
-    let tkhd = full(
-        b"tkhd",
-        0,
-        3,
-        &[&[0; 8], &1u32.to_be_bytes(), &[0; 4], &[0; 4], &[0; 8], &[0; 4], &[0; 4], &MATRIX, &w, &[0, 0], &h, &[0, 0]],
-    );
+    let tkhd = full(b"tkhd", 0, 3, &[&[0; 8], &1u32.to_be_bytes(), &[0; 4], &[0; 4], &[0; 8], &[0; 4], &[0; 4], &MATRIX, &w, &[0, 0], &h, &[0, 0]]);
     let mdhd = full(b"mdhd", 0, 0, &[&[0; 8], &TIMESCALE.to_be_bytes(), &[0; 4], &[0x55, 0xc4, 0, 0]]);
     let hdlr = full(b"hdlr", 0, 0, &[&[0; 4], b"vide", &[0; 12], b"video\0"]);
     let vmhd = full(b"vmhd", 0, 1, &[&[0; 8]]);
@@ -57,6 +49,7 @@ pub fn init_segment(codec: Codec, config: &[u8], width: u16, height: u16) -> Vec
         Codec::Hevc => (b"hvc1", b"hvcC"),
         Codec::Av1 => (b"av01", b"av1C"),
     };
+    #[rustfmt::skip] // fields grouped as in the ISO BMFF VisualSampleEntry layout
     let sample_entry = bx(
         entry,
         &[
@@ -93,10 +86,7 @@ pub fn fragment(seq: u32, dts: u64, duration: u32, key: bool, sample: &[u8]) -> 
             0x000701,
             &[&1u32.to_be_bytes(), &offset.to_be_bytes(), &duration.to_be_bytes(), &(sample.len() as u32).to_be_bytes(), &flags.to_be_bytes()],
         );
-        let traf = bx(
-            b"traf",
-            &[&full(b"tfhd", 0, 0x020000, &[&1u32.to_be_bytes()]), &full(b"tfdt", 1, 0, &[&dts.to_be_bytes()]), &trun],
-        );
+        let traf = bx(b"traf", &[&full(b"tfhd", 0, 0x020000, &[&1u32.to_be_bytes()]), &full(b"tfdt", 1, 0, &[&dts.to_be_bytes()]), &trun]);
         bx(b"moof", &[&full(b"mfhd", 0, 0, &[&seq.to_be_bytes()]), &traf])
     };
     let size = moof(0).len() as u32;
@@ -176,7 +166,9 @@ mod tests {
 
     #[test]
     fn init_segment_structure() {
-        for (codec, au, entry) in [(Codec::H264, h264_idr(), b"avc1avcC"), (Codec::Hevc, hevc_idr(), b"hvc1hvcC"), (Codec::Av1, av1_key(), b"av01av1C")] {
+        for (codec, au, entry) in
+            [(Codec::H264, h264_idr(), b"avc1avcC"), (Codec::Hevc, hevc_idr(), b"hvc1hvcC"), (Codec::Av1, av1_key(), b"av01av1C")]
+        {
             let config = codec::config_record(codec, &au).unwrap();
             let init = init_segment(codec, &config, 1920, 1080);
             let mut boxes = Vec::new();
@@ -227,7 +219,9 @@ mod tests {
     #[test]
     fn remuxer_follows_codec_changes() {
         let mut r = Remuxer::default();
-        for (cs, au, entry) in [("hvc1.1.6.L153.90", hevc_idr(), b"hvc1"), ("av01.0.13M.08", av1_key(), b"av01"), ("avc1.640033", h264_idr(), b"avc1")] {
+        for (cs, au, entry) in
+            [("hvc1.1.6.L153.90", hevc_idr(), b"hvc1"), ("av01.0.13M.08", av1_key(), b"av01"), ("avc1.640033", h264_idr(), b"avc1")]
+        {
             let cfg = format!(r#"{{"codec":"{cs}","width":1280,"height":720,"fps":60}}"#);
             r.push(&Packet::new(Kind::VideoConfig, false, 0, cfg.into_bytes()));
             let out = r.push(&Packet::new(Kind::Video, true, 1000, au));

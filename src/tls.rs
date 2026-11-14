@@ -117,7 +117,14 @@ impl Write for Writer {
 struct AcceptAny(Arc<CryptoProvider>);
 
 impl ServerCertVerifier for AcceptAny {
-    fn verify_server_cert(&self, _: &CertificateDer, _: &[CertificateDer], _: &ServerName, _: &[u8], _: UnixTime) -> Result<ServerCertVerified, rustls::Error> {
+    fn verify_server_cert(
+        &self,
+        _: &CertificateDer,
+        _: &[CertificateDer],
+        _: &ServerName,
+        _: &[u8],
+        _: UnixTime,
+    ) -> Result<ServerCertVerified, rustls::Error> {
         Ok(ServerCertVerified::assertion())
     }
     fn verify_tls12_signature(&self, m: &[u8], c: &CertificateDer, d: &DigitallySignedStruct) -> Result<HandshakeSignatureValid, rustls::Error> {
@@ -136,10 +143,7 @@ pub type ClientStream = StreamOwned<ClientConnection, TcpStream>;
 /// TLS client to `host` that does not verify the certificate.
 pub fn connect_unverified(host: &str, tcp: TcpStream) -> Result<ClientStream> {
     let provider = Arc::new(rustls::crypto::ring::default_provider());
-    let config = ClientConfig::builder()
-        .dangerous()
-        .with_custom_certificate_verifier(Arc::new(AcceptAny(provider)))
-        .with_no_client_auth();
+    let config = ClientConfig::builder().dangerous().with_custom_certificate_verifier(Arc::new(AcceptAny(provider))).with_no_client_auth();
     let conn = ClientConnection::new(Arc::new(config), ServerName::try_from(host.to_owned())?)?;
     Ok(StreamOwned::new(conn, tcp))
 }

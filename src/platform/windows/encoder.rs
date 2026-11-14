@@ -209,7 +209,8 @@ impl Encoder {
                 s.AddBuffer(&MFCreateMemoryBuffer(self.out_size)?)?;
                 Some(s)
             };
-            let mut buf = [MFT_OUTPUT_DATA_BUFFER { dwStreamID: 0, pSample: ManuallyDrop::new(sample), dwStatus: 0, pEvents: ManuallyDrop::new(None) }];
+            let mut buf =
+                [MFT_OUTPUT_DATA_BUFFER { dwStreamID: 0, pSample: ManuallyDrop::new(sample), dwStatus: 0, pEvents: ManuallyDrop::new(None) }];
             let mut status = 0;
             let r = self.mft.ProcessOutput(0, &mut buf, &mut status);
             let sample = ManuallyDrop::take(&mut buf[0].pSample);
