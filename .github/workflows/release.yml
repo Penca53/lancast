@@ -1,0 +1,29 @@
+# Push a version tag (e.g. `git tag v0.1.0 && git push origin v0.1.0`) to build
+# lancast.exe and publish it as a GitHub release. The website's download button
+# always points at the newest release's lancast.exe, so it never needs editing.
+name: Release
+
+on:
+  push:
+    tags: ["v*"]
+
+permissions:
+  contents: write
+
+jobs:
+  windows:
+    runs-on: windows-latest
+    env:
+      # Link the C runtime statically so the exe runs on PCs without the VC++ redistributable.
+      RUSTFLAGS: -C target-feature=+crt-static
+    steps:
+      - uses: actions/checkout@v4
+      - name: Build
+        run: cargo build --release --locked
+      - name: Publish release
+        shell: bash
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          gh release create "$GITHUB_REF_NAME" target/release/lancast.exe \
+            --title "LanCast $GITHUB_REF_NAME" --generate-notes

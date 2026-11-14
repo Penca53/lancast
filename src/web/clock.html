@@ -1,0 +1,54 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<title>LanCast latency check</title>
+<style>
+  html, body { margin: 0; height: 100%; background: #111; color: #fff;
+    font-family: ui-monospace, "Cascadia Mono", Consolas, monospace; }
+  body { display: flex; flex-direction: column; align-items: center; justify-content: center; gap: 2vh; }
+  #t { font-size: 22vw; font-weight: 700; letter-spacing: -0.02em; font-variant-numeric: tabular-nums; }
+  #flash { width: 30vh; height: 12vh; background: #fff; visibility: hidden; }
+  button { font-size: 2.2vh; padding: .5em 1.2em; }
+  p { font-family: system-ui, sans-serif; font-size: 2.2vh; opacity: .7; text-align: center; max-width: 60ch; }
+</style>
+</head>
+<body>
+<div id="t">--.-</div>
+<div id="flash"></div>
+<button id="sync">Start A/V sync test</button>
+<p>Keep this window visible on the PC while casting. On the TV, the live PC clock appears in the
+top-left corner; the difference between it and this clock in the video is the real delay.</p>
+<script>
+// Seconds within the minute with tenths; same format as the TV overlay.
+const fmt = ms => ((ms / 1000) % 60).toFixed(1).padStart(4, '0');
+const t = document.getElementById('t');
+const tick = () => { t.textContent = fmt(Date.now()); requestAnimationFrame(tick); };
+tick();
+
+// A/V sync test: a white flash and a beep at every whole second, generated together on
+// the PC. On the TV they should coincide; if not, adjust with the remote's left/right keys.
+document.getElementById('sync').onclick = e => {
+  e.target.remove();
+  const ctx = new AudioContext(), box = document.getElementById('flash');
+  const beepAt = when => {
+    const o = ctx.createOscillator(), g = ctx.createGain();
+    o.frequency.value = 1000; g.gain.value = 0.3;
+    o.connect(g).connect(ctx.destination);
+    o.start(when); o.stop(when + 0.08);
+  };
+  let next = Math.ceil(Date.now() / 1000) * 1000;
+  (function loop() {
+    const now = Date.now();
+    if (now >= next - 50) { // schedule the beep exactly; flash on the frame closest to it
+      beepAt(ctx.currentTime + Math.max(0, next - now) / 1000);
+      setTimeout(() => { box.style.visibility = 'visible'; setTimeout(() => box.style.visibility = 'hidden', 80); }, Math.max(0, next - now));
+      next += 1000;
+    }
+    requestAnimationFrame(loop);
+  })();
+};
+</script>
+</body>
+</html>

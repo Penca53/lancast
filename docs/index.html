@@ -1,0 +1,321 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>LanCast</title>
+<meta name="description" content="Cast your whole PC screen, with sound, to your smart TV over your home network. Nothing to install on the TV.">
+<meta property="og:title" content="LanCast: cast your PC screen to your TV">
+<meta property="og:description" content="Your whole PC screen and its sound, on your TV. No app on the TV, no account, no cloud.">
+<meta property="og:type" content="website">
+<meta property="og:image" content="https://penca53.github.io/lancast/icon-512.png">
+<link rel="icon" href="icon.svg" type="image/svg+xml">
+<link rel="icon" href="icon-32.png" sizes="32x32" type="image/png">
+<link rel="apple-touch-icon" href="icon-180.png">
+<script>
+  // Before first paint: apply the saved theme (if any) so the page doesn't flash.
+  (function () {
+    var d = document.documentElement;
+    d.classList.add("js");
+    try { var t = localStorage.getItem("theme"); if (t === "light" || t === "dark") d.setAttribute("data-theme", t); } catch (e) {}
+  })();
+</script>
+<style>
+  :root {
+    --bg: #fbfbfd; --bg-a: rgba(251, 251, 253, .82); --text: #0b1220; --muted: #5b6475; --line: #e6e8ef; --soft: #f3f4f8;
+    --green: #059669; --indigo: #4f46e5; --amber: #d97706; --on-indigo: #ffffff;
+    --green-soft: #e3f6ee; --indigo-soft: #eceefe; --amber-soft: #fff6e5;
+    color-scheme: light;
+  }
+  @media (prefers-color-scheme: dark) {
+    :root:not([data-theme="light"]) {
+      --bg: #0a0e1a; --bg-a: rgba(10, 14, 26, .82); --text: #eef1f7; --muted: #98a1b3; --line: #1e2536; --soft: #121829;
+      --green: #34d399; --indigo: #818cf8; --amber: #fbbf24; --on-indigo: #0a0e1a;
+      --green-soft: #0e2a22; --indigo-soft: #191c3b; --amber-soft: #261d0a;
+      color-scheme: dark;
+    }
+  }
+  :root[data-theme="dark"] {
+    --bg: #0a0e1a; --bg-a: rgba(10, 14, 26, .82); --text: #eef1f7; --muted: #98a1b3; --line: #1e2536; --soft: #121829;
+    --green: #34d399; --indigo: #818cf8; --amber: #fbbf24; --on-indigo: #0a0e1a;
+    --green-soft: #0e2a22; --indigo-soft: #191c3b; --amber-soft: #261d0a;
+    color-scheme: dark;
+  }
+  * { box-sizing: border-box; }
+  html { scroll-behavior: smooth; }
+  body { margin: 0; background: var(--bg); color: var(--text); font: 16px/1.55 system-ui, -apple-system, "Segoe UI", Roboto, sans-serif; transition: background-color .3s, color .3s; }
+  a { color: inherit; }
+  .wrap { max-width: 960px; margin: 0 auto; padding: 0 24px; }
+
+  /* Header */
+  .top { position: sticky; top: 0; z-index: 10; background: var(--bg-a); backdrop-filter: saturate(1.4) blur(12px); -webkit-backdrop-filter: saturate(1.4) blur(12px);
+         border-bottom: 1px solid transparent; transition: border-color .25s, background-color .3s; }
+  .top.scrolled { border-bottom-color: var(--line); }
+  .top .wrap { display: flex; align-items: center; justify-content: space-between; height: 56px; gap: 12px; }
+  .brand { display: flex; align-items: center; gap: 9px; font-weight: 650; text-decoration: none; font-size: 15px; }
+  .brand img { width: 26px; height: 26px; }
+  .top nav { display: flex; align-items: center; gap: 2px; font-size: 14px; }
+  .top nav a { position: relative; text-decoration: none; color: var(--muted); padding: 6px 10px; border-radius: 8px; transition: color .2s, background-color .2s; }
+  .top nav a:hover { color: var(--text); background: var(--soft); }
+  .top nav a[aria-current="true"] { color: var(--text); }
+  .top nav a[aria-current="true"]::after { content: ""; position: absolute; left: 10px; right: 10px; bottom: 1px; height: 2px; border-radius: 1px; background: var(--green); }
+  .top nav .dl { margin-left: 6px; background: var(--indigo); color: var(--on-indigo); font-weight: 600; padding: 6px 14px; border-radius: 999px; }
+  .top nav .dl:hover { background: var(--indigo); color: var(--on-indigo); filter: brightness(1.1); }
+  .theme { display: grid; place-items: center; width: 34px; height: 34px; margin-left: 4px; border-radius: 50%; border: 1px solid var(--line); background: transparent; color: var(--muted); cursor: pointer; transition: color .2s, border-color .2s, transform .4s; }
+  .theme:hover { color: var(--text); border-color: var(--muted); }
+  .theme:active { transform: rotate(30deg); }
+  .theme svg { width: 17px; height: 17px; }
+  .theme .sun { display: none; }
+  @media (prefers-color-scheme: dark) { :root:not([data-theme="light"]) .theme .sun { display: block; } :root:not([data-theme="light"]) .theme .moon { display: none; } }
+  :root[data-theme="dark"] .theme .sun { display: block; }
+  :root[data-theme="dark"] .theme .moon { display: none; }
+
+  /* Hero */
+  .hero { display: grid; grid-template-columns: 1.2fr 1fr; gap: 40px; align-items: center; padding: 48px 0 16px; }
+  .live { display: inline-flex; align-items: center; gap: 8px; font-size: 13px; color: var(--muted); background: var(--green-soft); padding: 4px 12px 4px 10px; border-radius: 999px; }
+  .live b { color: var(--green); font-weight: 600; }
+  .dot { position: relative; width: 8px; height: 8px; border-radius: 50%; background: var(--green); }
+  .dot::after { content: ""; position: absolute; inset: 0; border-radius: 50%; background: var(--green); animation: ping 2s cubic-bezier(0, 0, .2, 1) infinite; }
+  h1 { font-size: clamp(38px, 5.4vw, 58px); line-height: 1.02; letter-spacing: -0.045em; font-weight: 700; margin: 16px 0 16px; }
+  h1 .grad { background: linear-gradient(90deg, var(--green), var(--indigo)); -webkit-background-clip: text; background-clip: text; color: transparent; }
+  .lead { font-size: 18px; color: var(--muted); margin: 0 0 24px; max-width: 26em; }
+  .btn { display: inline-flex; align-items: center; gap: 9px; background: var(--indigo); color: var(--on-indigo); text-decoration: none; font-weight: 600; padding: 13px 24px; border-radius: 999px; font-size: 16px;
+         box-shadow: 0 8px 24px -10px var(--indigo); transition: filter .2s, transform .2s, box-shadow .2s; }
+  .btn svg { width: 18px; height: 18px; transition: transform .2s; }
+  .btn:hover { filter: brightness(1.08); transform: translateY(-1px); box-shadow: 0 12px 28px -10px var(--indigo); }
+  .btn:hover svg { transform: translateY(2px); }
+  .meta { font-size: 13px; color: var(--muted); margin-top: 12px; }
+
+  .frame { display: block; width: 100%; height: auto; color: var(--text); }
+  .flow { stroke-dasharray: 4 6; animation: flow 1s linear infinite; }
+  .ring { transform-box: fill-box; transform-origin: center; animation: ring 2.4s ease-out infinite; }
+  .cast { opacity: 0; animation: castin .6s ease-out .9s forwards; }
+
+  /* Sections */
+  section { padding: 48px 0 0; scroll-margin-top: 56px; }
+  .head { display: flex; align-items: baseline; justify-content: space-between; gap: 16px; margin: 0 0 22px; }
+  h2 { font-size: clamp(24px, 3.2vw, 30px); letter-spacing: -0.03em; margin: 0; font-weight: 700; }
+  .head span { font-size: 13px; color: var(--muted); }
+
+  .steps { display: grid; grid-template-columns: repeat(3, 1fr); gap: 28px; list-style: none; margin: 0; padding: 0; counter-reset: s; }
+  .steps li { --c: var(--green); position: relative; padding-top: 14px; counter-increment: s; }
+  .steps li:nth-child(2) { --c: var(--indigo); }
+  .steps li:nth-child(3) { --c: var(--amber); }
+  .steps li::after { content: ""; position: absolute; left: 0; right: 0; top: 0; height: 2px; border-radius: 1px; background: var(--c); transform-origin: left; }
+  .steps li::before { content: "0" counter(s); font-size: 12px; font-weight: 600; color: var(--c); font-variant-numeric: tabular-nums; }
+  .steps h3 { font-size: 18px; margin: 4px 0 4px; letter-spacing: -0.01em; }
+  .steps p { margin: 0; color: var(--muted); font-size: 15px; }
+
+  .aside { margin-top: 24px; background: var(--amber-soft); border: 1px solid color-mix(in srgb, var(--amber) 30%, transparent); border-radius: 14px; padding: 16px 20px; font-size: 15px; color: var(--muted);
+           display: grid; grid-template-columns: 1fr 1fr; gap: 6px 28px; }
+  .aside p { margin: 0; }
+  .aside b { color: var(--text); font-weight: 600; }
+
+  .needs { display: grid; grid-template-columns: 1fr 1fr; gap: 28px; }
+  .needs > div { --c: var(--indigo); }
+  .needs > div + div { --c: var(--green); }
+  .needs h3 { font-size: 13px; font-weight: 700; color: var(--c); margin: 0 0 2px; text-transform: uppercase; letter-spacing: .06em; }
+  .needs ul { list-style: none; margin: 0; padding: 0; }
+  .needs li { position: relative; padding: 9px 0 9px 18px; border-bottom: 1px solid var(--line); font-size: 15px; }
+  .needs li::before { content: ""; position: absolute; left: 2px; top: 17px; width: 6px; height: 6px; border-radius: 50%; background: var(--c); }
+
+  .faq { display: grid; grid-template-columns: 1fr 1fr; gap: 0 28px; }
+  .qa { padding: 12px 0; border-top: 1px solid var(--line); transition: border-color .2s; }
+  .qa:hover { border-top-color: var(--indigo); }
+  .qa h3 { font-size: 15px; margin: 0 0 2px; font-weight: 600; }
+  .qa p { margin: 0; color: var(--muted); font-size: 15px; }
+  .head a { color: var(--indigo); text-decoration: none; }
+  .head a:hover { text-decoration: underline; }
+
+  kbd { font: 600 12px system-ui, sans-serif; border: 1px solid var(--line); border-bottom-width: 2px; border-radius: 5px; padding: 1px 5px; color: var(--text); background: var(--soft); }
+  footer { margin-top: 56px; padding: 20px 0 32px; border-top: 1px solid var(--line); display: flex; flex-wrap: wrap; justify-content: space-between; gap: 8px; font-size: 13px; color: var(--muted); }
+  footer a { color: var(--muted); text-decoration: none; margin-left: 18px; }
+  footer a:hover { color: var(--indigo); }
+
+  /* Reveal on scroll (only when JS runs, so the page never stays hidden) */
+  .js .reveal { opacity: 0; transform: translateY(14px); transition: opacity .6s ease, transform .6s ease; transition-delay: var(--d, 0s); }
+  .js .reveal.in { opacity: 1; transform: none; }
+  .js .steps li::after { transform: scaleX(0); transition: transform .8s cubic-bezier(.2, .7, .2, 1); transition-delay: calc(var(--d, 0s) + .15s); }
+  .js .steps li.in::after { transform: scaleX(1); }
+
+  @keyframes ping { 75%, 100% { transform: scale(2.6); opacity: 0; } }
+  @keyframes flow { to { stroke-dashoffset: -10; } }
+  @keyframes ring { 0% { transform: scale(.6); opacity: .7; } 100% { transform: scale(1.8); opacity: 0; } }
+  @keyframes castin { to { opacity: 1; } }
+
+  @media (prefers-reduced-motion: reduce) {
+    html { scroll-behavior: auto; }
+    *, *::before, *::after { animation: none !important; transition: none !important; }
+    .cast { opacity: 1; }
+    .js .reveal { opacity: 1; transform: none; }
+    .js .steps li::after { transform: none; }
+  }
+
+  @media (max-width: 760px) {
+    .wrap { padding: 0 16px; }
+    .brand span, .top nav .gh { display: none; }
+    .top nav a { padding: 6px 7px; }
+    .top nav .dl { margin-left: 2px; padding: 6px 12px; }
+    .hero { grid-template-columns: 1fr; gap: 28px; padding: 32px 0 8px; }
+    .frame { max-width: 420px; }
+    .steps, .needs, .faq, .aside { grid-template-columns: 1fr; }
+    .steps { gap: 18px; }
+    .head span { display: none; }
+    footer a { margin: 0 14px 0 0; }
+  }
+  @media (max-width: 560px) { .top nav .dl { display: none; } }
+</style>
+</head>
+<body>
+<header class="top" id="top">
+  <div class="wrap">
+    <a class="brand" href="#"><img src="icon.svg" alt=""><span>LanCast</span></a>
+    <nav aria-label="Sections">
+      <a href="#how">How it works</a>
+      <a href="#needs">Requirements</a>
+      <a href="#faq">FAQ</a>
+      <a class="gh" href="https://github.com/Penca53/lancast">GitHub</a>
+      <a class="dl" href="https://github.com/Penca53/lancast/releases/latest/download/lancast.exe">Download</a>
+      <button class="theme" id="theme" type="button" aria-label="Switch between light and dark theme" title="Light / dark">
+        <svg class="moon" viewBox="0 0 20 20" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M16.5 12.2A7 7 0 0 1 7.8 3.5 7 7 0 1 0 16.5 12.2z"/></svg>
+        <svg class="sun" viewBox="0 0 20 20" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" aria-hidden="true"><circle cx="10" cy="10" r="3.6"/><path d="M10 1.8v2M10 16.2v2M1.8 10h2M16.2 10h2M4.2 4.2l1.4 1.4M14.4 14.4l1.4 1.4M4.2 15.8l1.4-1.4M14.4 5.6l1.4-1.4"/></svg>
+      </button>
+    </nav>
+  </div>
+</header>
+
+<div class="wrap">
+  <div class="hero">
+    <div>
+      <span class="live reveal"><i class="dot"></i><span><b>Live</b> · PC to TV, over your home network</span></span>
+      <h1 class="reveal" style="--d:.05s">Cast your screen.<br><span class="grad">Nothing else.</span></h1>
+      <p class="lead reveal" style="--d:.1s">Your whole PC screen and its sound, on your TV. No app on the TV, no account, no cloud.</p>
+      <div class="reveal" style="--d:.15s">
+        <a class="btn" href="https://github.com/Penca53/lancast/releases/latest/download/lancast.exe">
+          <svg viewBox="0 0 20 20" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M10 3v10M5.5 8.5 10 13l4.5-4.5M4 17h12"/></svg>
+          Download for Windows
+        </a>
+        <p class="meta" id="meta">Free and open source · Windows 10 &amp; 11 · No installer</p>
+      </div>
+    </div>
+
+    <svg class="frame reveal" style="--d:.2s" viewBox="0 0 460 280" role="img" aria-label="A line drawing of a laptop casting its screen to a TV">
+      <rect x="171" y="17" width="274" height="174" rx="9" fill="var(--indigo-soft)"/>
+      <rect x="7" y="161" width="118" height="76" rx="6" fill="var(--indigo-soft)"/>
+      <g fill="none" stroke="currentColor" stroke-width="2">
+        <rect x="170" y="16" width="276" height="176" rx="10"/>
+        <path d="M278 222h60M308 192v30"/>
+        <rect x="6" y="160" width="120" height="78" rx="7"/>
+        <path d="M0 252h132"/>
+      </g>
+      <!-- laptop content -->
+      <rect x="18" y="174" width="44" height="6" rx="3" fill="var(--indigo)"/>
+      <rect x="18" y="186" width="70" height="4" rx="2" fill="var(--indigo)" opacity=".35"/>
+      <rect x="18" y="206" width="56" height="20" rx="3" fill="var(--green)" opacity=".5"/>
+      <rect x="80" y="206" width="34" height="20" rx="3" fill="var(--amber)" opacity=".5"/>
+      <path class="flow" d="M126 190 C 156 190, 140 104, 170 104" fill="none" stroke="var(--green)" stroke-width="2.5"/>
+      <!-- the same content, cast to the TV -->
+      <g class="cast">
+        <rect x="190" y="38" width="108" height="14" rx="7" fill="var(--indigo)"/>
+        <rect x="190" y="62" width="160" height="9" rx="4.5" fill="var(--indigo)" opacity=".35"/>
+        <rect x="190" y="120" width="140" height="50" rx="6" fill="var(--green)" opacity=".5"/>
+        <rect x="340" y="120" width="84" height="50" rx="6" fill="var(--amber)" opacity=".5"/>
+      </g>
+      <circle class="ring" cx="404" cy="45" r="10" fill="none" stroke="var(--green)" stroke-width="2"/>
+      <circle cx="404" cy="45" r="5" fill="var(--green)"/>
+    </svg>
+  </div>
+
+  <section id="how">
+    <div class="head reveal"><h2>How it works</h2><span>About a minute, start to finish</span></div>
+    <ol class="steps">
+      <li class="reveal"><h3>Open LanCast</h3><p>Run <b>lancast.exe</b> on your PC, with your TV on and on the same network.</p></li>
+      <li class="reveal" style="--d:.1s"><h3>Click Cast</h3><p>Pick your TV. The first time, accept the request on the TV.</p></li>
+      <li class="reveal" style="--d:.2s"><h3>Press OK</h3><p>On the TV remote, for sound and full screen.</p></li>
+    </ol>
+    <div class="aside reveal">
+      <p><b>"Windows protected your PC"?</b> Click <b>More info</b>, then <b>Run anyway</b>. LanCast isn't code-signed yet.</p>
+      <p><b>Windows Firewall asks?</b> Click <b>Allow</b>, so the TV can reach the PC.</p>
+    </div>
+  </section>
+
+  <section id="needs">
+    <div class="head reveal"><h2>Requirements</h2><span>Most PCs from recent years</span></div>
+    <div class="needs">
+      <div class="reveal"><h3>PC</h3><ul>
+        <li>Windows 10 or 11, 64-bit</li>
+        <li>NVIDIA, AMD or Intel graphics with video encoding</li>
+        <li>Wired network recommended; Wi-Fi works</li>
+      </ul></div>
+      <div class="reveal" style="--d:.1s"><h3>TV</h3><ul>
+        <li>Any smart TV with a web browser</li>
+        <li>LG webOS opens automatically (the only TVs tested so far)</li>
+        <li>Phones, tablets, computers: open the link</li>
+      </ul></div>
+    </div>
+  </section>
+
+  <section id="faq">
+    <div class="head reveal"><h2>Questions</h2><span><a href="https://github.com/Penca53/lancast#readme">Technical details ↗</a></span></div>
+    <div class="faq">
+      <div class="qa reveal"><h3>Is it free?</h3><p>Yes. Open source, Apache 2.0. No ads, no accounts.</p></div>
+      <div class="qa reveal" style="--d:.05s"><h3>Does it use the internet?</h3><p>No. Video goes straight from your PC to your TV on your home network.</p></div>
+      <div class="qa reveal"><h3>How much delay?</h3><p>On an LG TV, about a tenth to a quarter of a second, plus the TV's own processing. Use the TV's Game mode.</p></div>
+      <div class="qa reveal" style="--d:.05s"><h3>TV not in the list?</h3><p>Check it's on and on the same network, and that the firewall was allowed. Or type the link LanCast shows into the TV's browser.</p></div>
+      <div class="qa reveal"><h3>Picture stutters?</h3><p>Choose Balanced, or Wi-Fi if either device is wireless.</p></div>
+      <div class="qa reveal" style="--d:.05s"><h3>No sound?</h3><p>Press <kbd>OK</kbd> on the remote. <kbd>◀</kbd> <kbd>▶</kbd> shift the sound if it's out of sync.</p></div>
+      <div class="qa reveal"><h3>Who can watch?</h3><p>Anyone on your network with the link, unless you change <b>Who can watch</b>.</p></div>
+      <div class="qa reveal" style="--d:.05s"><h3>Mac or Linux?</h3><p>Planned.</p></div>
+    </div>
+  </section>
+
+  <footer>
+    <span>LanCast · Apache 2.0</span>
+    <span><a href="https://github.com/Penca53/lancast">Source</a><a href="https://github.com/Penca53/lancast/releases">Versions</a><a href="https://github.com/Penca53/lancast/issues">Report a problem</a></span>
+  </footer>
+</div>
+
+<script>
+  // Light/dark switch: follows the system until clicked, then remembers the choice.
+  const root = document.documentElement;
+  const dark = matchMedia("(prefers-color-scheme: dark)");
+  document.getElementById("theme").addEventListener("click", () => {
+    const now = root.getAttribute("data-theme") || (dark.matches ? "dark" : "light");
+    const next = now === "dark" ? "light" : "dark";
+    root.setAttribute("data-theme", next);
+    try { localStorage.setItem("theme", next); } catch (e) {}
+  });
+
+  // Header border once the page scrolls.
+  const bar = document.getElementById("top");
+  const links = [...document.querySelectorAll('.top nav a[href^="#"]')];
+  const onScroll = () => {
+    bar.classList.toggle("scrolled", scrollY > 4);
+    if (scrollY < 40) links.forEach(a => a.removeAttribute("aria-current")); // at the top, no section is "current"
+  };
+  addEventListener("scroll", onScroll, { passive: true }); onScroll();
+
+  // Fade sections in as they scroll into view.
+  const show = el => el.classList.add("in");
+  if ("IntersectionObserver" in window) {
+    const io = new IntersectionObserver(es => es.forEach(e => { if (e.isIntersecting) { show(e.target); io.unobserve(e.target); } }), { rootMargin: "0px 0px -8% 0px" });
+    document.querySelectorAll(".reveal").forEach(el => io.observe(el));
+
+    // Underline the header link of the section being read.
+    const spy = new IntersectionObserver(es => es.forEach(e => {
+      if (e.isIntersecting && scrollY >= 40) links.forEach(a => a.setAttribute("aria-current", a.hash === "#" + e.target.id));
+    }), { rootMargin: "-45% 0px -50% 0px" });
+    document.querySelectorAll("section[id]").forEach(s => spy.observe(s));
+  } else {
+    document.querySelectorAll(".reveal").forEach(show);
+  }
+
+  // Latest version next to the button.
+  fetch("https://api.github.com/repos/Penca53/lancast/releases/latest").then(r => r.ok ? r.json() : null).then(rel => {
+    const exe = rel && (rel.assets || []).find(a => /\.exe$/i.test(a.name));
+    if (!exe) return;
+    document.getElementById("meta").textContent = "Version " + rel.tag_name.replace(/^v/, "") + " · " + (exe.size / 1048576).toFixed(1) + " MB · Windows 10 & 11 · No installer";
+  }).catch(() => {});
+</script>
+</body>
+</html>

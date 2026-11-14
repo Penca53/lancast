@@ -1,0 +1,34 @@
+<script>
+// LanCast TV app bootstrap (injected into player.html by `lancast --export-webos-app`).
+// The PC launches the app with {"server": "ip:port", "params": "mode=auto"}; webOS exposes
+// them as JSON in launchParams. They're kept in localStorage so reloads and launches from
+// the TV's home screen still find the PC.
+(function () {
+  const sys = window.webOSSystem || window.PalmSystem || {};
+  const read = () => { try { return JSON.parse(sys.launchParams || '{}'); } catch (e) { return {}; } };
+  const store = (k, v) => {
+    try {
+      if (v) localStorage.setItem('lancast.' + k, v);
+      return localStorage.getItem('lancast.' + k) || v || '';
+    } catch (e) { return v || ''; }
+  };
+  const p = read();
+  window.LANCAST = {
+    server: store('server', p.server),
+    params: store('params', p.params),
+    setMode(m) {
+      const q = new URLSearchParams(this.params);
+      q.set('mode', m);
+      store('params', q.toString());
+      location.reload();
+    },
+  };
+  // Launched again while running (e.g. Cast pressed with new settings): pick up the new params.
+  document.addEventListener('webOSRelaunch', () => {
+    const n = read();
+    store('server', n.server);
+    store('params', n.params);
+    location.reload();
+  });
+})();
+</script>

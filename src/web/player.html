@@ -1,0 +1,480 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<title>LanCast</title>
+<style>
+  html, body { margin: 0; height: 100%; background: #000; overflow: hidden; cursor: none; color: #eee;
+    font-family: system-ui, -apple-system, "Segoe UI", sans-serif; }
+  canvas, video { position: fixed; inset: 0; width: 100vw; height: 100vh; object-fit: contain; }
+  #msg { position: fixed; inset: 0; display: flex; flex-direction: column; gap: 1.5vh; align-items: center;
+    justify-content: center; font-size: 3.2vh; text-align: center; pointer-events: none; }
+  #msg small { font-size: 2vh; opacity: .6; }
+  #msgText { white-space: pre-line; }
+  #hint { position: fixed; bottom: 4vh; left: 50%; transform: translateX(-50%); font-size: 2.4vh;
+    background: #000c; padding: .6em 1.2em; border-radius: 2em; display: none; }
+  #hud { position: fixed; top: 2vh; left: 2vw; font: 1.8vh/1.5 ui-monospace, monospace; background: #000b;
+    padding: .5em .9em; border-radius: .5em; white-space: pre; display: none; }
+  #pcclock { font-size: 7vh; font-weight: 700; font-variant-numeric: tabular-nums; }
+</style>
+</head>
+<body>
+<canvas id="c"></canvas>
+<video id="v" muted playsinline></video>
+<div id="msg"><div id="msgText">Connecting…</div><small>LanCast</small></div>
+<div id="hint">Press OK to enable sound</div>
+<div id="hud"><div id="pcclock" title="PC clock now"></div><div id="hudText"></div></div>
+<script>
+'use strict';
+const $ = id => document.getElementById(id);
+// Served by the PC: settings come from the URL. Packaged as a TV app (see tvapp.rs), a
+// bootstrap script defines window.LANCAST with the PC address and settings instead.
+const app = window.LANCAST || null;
+const server = app ? app.server : location.host;
+const params = new URLSearchParams(app ? app.params : location.search);
+const setMode = m => {
+  if (app) return app.setMode(m);
+  const q = new URLSearchParams(location.search);
+  q.set('mode', m); // keeps the other settings (hud, access code)
+  location.search = q;
+};
+let mode = params.get('mode') || 'auto';
+// LG webOS decodes WebRTC video into a hidden hardware layer (black screen, and canvas
+// copies come out black too), and no API reveals that; so skip WebRTC there.
+const webrtcInvisible = /Web0S|webOS|NetCast/i.test(navigator.userAgent);
+if (mode === 'auto') {
+  mode = 'VideoDecoder' in window ? 'webcodecs' : 'RTCPeerConnection' in window && !webrtcInvisible ? 'webrtc' : 'mse';
+}
+const fallBack = why => { log(`${why}; falling back to MSE`); setMode('mse'); };
+const codecName = c => ({ avc1: 'H.264', hvc1: 'HEVC', av01: 'AV1' })[c.slice(0, 4)] || c;
+// The PC encodes a codec this device can't decode: say so instead of showing black.
+function unsupported(c) {
+  log(`${mode} can't decode ${c}`);
+  status(`This TV can't play ${codecName(c)} video.\nChoose another codec in LanCast on your PC.`);
+}
+const canvas = $('c'), video = $('v'), hud = $('hud'), hint = $('hint');
+if (mode === 'mse') canvas.style.display = 'none';
+else if (mode === 'webcodecs') video.style.display = 'none';
+// WebRTC: the video element only feeds the canvas; keep it rendered but invisible
+// (display:none can stop frame updates).
+else video.style.cssText = 'width:2px;height:2px;opacity:0;inset:auto;';
+// Defined early so fallBack() can log before the telemetry section below.
+function log(msg) { send({ t: 'log', msg: String(msg) }); }
+const K = { VCFG: 1, VIDEO: 2, ACFG: 3, AUDIO: 4, VINIT: 5 };
+const decodeText = d => JSON.parse(new TextDecoder().decode(d));
+let ws = null;
+
+function status(text) {
+  $('msgText').textContent = text;
+  $('msg').style.display = text ? 'flex' : 'none';
+}
+
+const send = o => { if (ws && ws.readyState === 1) ws.send(JSON.stringify(o)); };
+
+// ---- stats / acknowledgements -------------------------------------------
+const stats = { frames: 0, counted: 0, fps: 0, codec: '', size: '' };
+// Tells the PC which capture timestamp is on screen now (it computes the latency).
+function ack(pts) {
+  send({ t: 'ack', pts });
+  status('');
+}
+function shown(pts) {
+  ack(pts);
+  stats.frames++;
+}
+
+// ---- WebCodecs path: lowest latency, frames drawn the moment they decode --
+const wc = {
+  dec: null, cfg: null, waitKey: true, ctx: null,
+  config(c) {
+    // Browsers only offer WebCodecs on secure pages (HTTPS, localhost, the TV app).
+    if (!('VideoDecoder' in window)) return fallBack('WebCodecs is unavailable on this page');
+    this.cfg = c; this.reset();
+    VideoDecoder.isConfigSupported({ codec: c.codec, optimizeForLatency: true })
+      .then(r => { if (!r.supported) fallBack(`WebCodecs can't decode ${c.codec}`); }, () => {});
+  },
+  reset() {
+    if (this.dec && this.dec.state !== 'closed') this.dec.close();
+    this.dec = null; this.waitKey = true;
+  },
+  frame(data, key, pts) {
+    if (!this.cfg) return;
+    if (this.waitKey) {
+      if (!key) return;
+      this.waitKey = false;
+      if (!this.dec) {
+        this.dec = new VideoDecoder({
+          output: f => this.draw(f),
+          error: e => { console.error(e); this.reset(); send({ t: 'key' }); },
+        });
+        this.dec.configure({ codec: this.cfg.codec, optimizeForLatency: true, hardwareAcceleration: 'prefer-hardware' });
+      }
+    }
+    if (this.dec.decodeQueueSize > 3) { this.waitKey = true; send({ t: 'key' }); return; }
+    this.dec.decode(new EncodedVideoChunk({ type: key ? 'key' : 'delta', timestamp: pts, data }));
+  },
+  draw(f) {
+    if (canvas.width !== f.displayWidth || canvas.height !== f.displayHeight) {
+      canvas.width = f.displayWidth; canvas.height = f.displayHeight;
+    }
+    if (!this.ctx) this.ctx = canvas.getContext('2d', { alpha: false, desynchronized: true });
+    this.ctx.drawImage(f, 0, 0);
+    const pts = f.timestamp;
+    f.close();
+    shown(pts);
+  },
+};
+
+// Buffer to keep ahead of MSE playback for a stream of `kbps`. Measured on an LG webOS TV (minutes
+// without a stall): 0.12 s at 25 Mbps, 0.25 s at 40 Mbps; 0.05 s at 25 or 0.15 s at 40 stall.
+// Interpolated between those, extrapolated above.
+const mseTarget = kbps => Math.min(0.5, Math.max(0.12, 0.12 + (kbps - 25000) * 0.13 / 15000));
+
+// ---- MSE path: hardware video plane, kept pinned to the live edge ----------
+const mse = {
+  ms: null, sb: null, queue: [], cfg: null, lastKey: null, keyAsked: false,
+  config(c) {
+    this.cfg = c;
+    if (!params.get('lag')) this.target = mseTarget(c.kbps || 25000);
+    if (!window.MediaSource || !MediaSource.isTypeSupported(`video/mp4; codecs="${c.codec}"`)) unsupported(c.codec);
+  },
+  reset() {
+    if (this.ms) { video.removeAttribute('src'); video.load(); }
+    this.ms = this.sb = this.lastKey = null; this.queue = [];
+  },
+  init(data) {
+    if (!MediaSource.isTypeSupported(`video/mp4; codecs="${this.cfg.codec}"`)) return;
+    this.reset();
+    const ms = this.ms = new MediaSource();
+    video.src = URL.createObjectURL(ms);
+    this.queue.push(data);
+    ms.addEventListener('sourceopen', () => {
+      URL.revokeObjectURL(video.src);
+      this.sb = ms.addSourceBuffer(`video/mp4; codecs="${this.cfg.codec}"`);
+      this.sb.addEventListener('updateend', () => this.pump());
+      this.pump();
+    }, { once: true });
+  },
+  frame(data, key, pts) {
+    if (!this.ms) return;
+    if (key) { this.lastKey = pts / 1e6; this.keyAsked = false; }
+    this.queue.push(data);
+    this.pump();
+  },
+  pump() {
+    const sb = this.sb;
+    if (!sb || sb.updating) return;
+    if (!this.queue.length) { this.trim(); return; }
+    const parts = this.queue; this.queue = [];
+    let buf = parts[0];
+    if (parts.length > 1) { // coalesce a backlog into one append (one copy, only when needed)
+      buf = new Uint8Array(parts.reduce((n, p) => n + p.length, 0));
+      let off = 0;
+      for (const p of parts) { buf.set(p, off); off += p.length; }
+    }
+    try { sb.appendBuffer(buf); } catch (e) { log(`appendBuffer: ${e.name}: ${e.message}`); ws.close(); return; }
+    this.chase();
+  },
+  // Old data can only be dropped up to a keyframe: everything after it depends on it.
+  // Keyframes are on demand, so ask for one every few seconds; TV buffers are small
+  // (at 50 Mbps a minute of video overflows them and playback stalls).
+  trim() {
+    const b = video.buffered;
+    if (!b.length || this.lastKey === null) return;
+    if (video.currentTime - this.lastKey > 3 && !this.keyAsked) { send({ t: 'key' }); this.keyAsked = true; }
+    if (this.lastKey - b.start(0) > 1 && video.currentTime > this.lastKey) this.sb.remove(b.start(0), this.lastKey);
+  },
+  seeks: 0, stalls: 0, rates: 0,
+  // How far behind the newest buffered frame playback is held (s); see mseTarget.
+  target: +(params.get('lag') || 0.12),
+  // Stay near the live edge by playing 10% faster while behind. Measured on an LG webOS TV:
+  // - every seek, stall or start makes the TV refill ~1 s before playing again;
+  // - every playbackRate change risks a stall, so change it rarely (hysteresis band);
+  // - 1.25x overshoots into stalls, 1.1x doesn't.
+  // So seek only when hopelessly behind, and otherwise catch up gently.
+  chase() {
+    const b = video.buffered;
+    if (!b.length) return;
+    const start = b.start(b.length - 1), end = b.end(b.length - 1), lag = end - video.currentTime, t = this.target;
+    if (video.currentTime < start || lag > t + 2.5) { video.currentTime = Math.max(start, end - t); this.seeks++; }
+    const rate = lag > t + 0.08 ? 1.1 : lag <= t ? 1 : video.playbackRate;
+    if (rate !== video.playbackRate) { video.playbackRate = rate; this.rates++; }
+    if (video.paused) video.play().catch(e => log(`play: ${e}`));
+  },
+};
+// TVs render MSE video on a hardware plane without per-frame callbacks, so report the
+// playback position instead (media time == capture timestamp in seconds).
+video.addEventListener('timeupdate', () => {
+  if (mode === 'mse' && !video.paused && video.currentTime > 0) ack(Math.round(video.currentTime * 1e6));
+});
+// ---- WebRTC path: low latency on plain HTTP; video over RTP, decoded by the TV ----------
+const rtc = {
+  pc: null, decoded: 0, last: null,
+  config(c) {
+    // The PC sends whatever codec it encodes; the browser must be able to receive it.
+    const mime = 'video/' + { avc1: 'h264', hvc1: 'h265', av01: 'av1' }[c.codec.slice(0, 4)];
+    const caps = window.RTCRtpReceiver && RTCRtpReceiver.getCapabilities && RTCRtpReceiver.getCapabilities('video');
+    if (caps && !caps.codecs.some(k => k.mimeType.toLowerCase() === mime)) return fallBack(`WebRTC can't receive ${mime}`);
+    if (!this.pc) this.start().catch(e => fallBack(`WebRTC setup failed: ${e}`));
+  },
+  async start() {
+    const pc = this.pc = new RTCPeerConnection({ bundlePolicy: 'max-bundle' });
+    pc.addTransceiver('video', { direction: 'recvonly' });
+    pc.ontrack = e => {
+      // Ask for the smallest jitter buffer the browser allows.
+      try { e.receiver.playoutDelayHint = 0; } catch (_) {}
+      if ('jitterBufferTarget' in e.receiver) e.receiver.jitterBufferTarget = 0;
+      video.srcObject = new MediaStream([e.track]);
+      video.play().catch(err => log(`play: ${err}`));
+      this.paint();
+    };
+    pc.onconnectionstatechange = () => {
+      log(`webrtc ${pc.connectionState}`);
+      if (pc.connectionState === 'failed') fallBack('WebRTC connection failed');
+    };
+    video.addEventListener('playing', () => status(''), { once: true });
+    await pc.setLocalDescription(await pc.createOffer());
+    send({ t: 'offer', sdp: pc.localDescription.sdp });
+  },
+  // LG webOS decodes WebRTC video but never shows the <video> element (it goes to a
+  // separate video layer that stays black), so copy frames onto the canvas instead.
+  ctx: null,
+  paint() {
+    const draw = () => {
+      if (!this.pc) return;
+      if (video.videoWidth) {
+        if (canvas.width !== video.videoWidth || canvas.height !== video.videoHeight) {
+          canvas.width = video.videoWidth; canvas.height = video.videoHeight;
+        }
+        if (!this.ctx) this.ctx = canvas.getContext('2d', { alpha: false, desynchronized: true, willReadFrequently: false });
+        this.ctx.drawImage(video, 0, 0);
+      }
+      requestAnimationFrame(draw);
+    };
+    requestAnimationFrame(draw);
+  },
+  answer(sdp) { this.pc.setRemoteDescription({ type: 'answer', sdp }).catch(e => fallBack(`bad answer: ${e}`)); },
+  // Receive-to-decoded delay (jitter buffer + decode) from the browser's own stats.
+  async sample() {
+    if (!this.pc) return;
+    const s = [...(await this.pc.getStats()).values()].find(r => r.type === 'inbound-rtp' && r.kind === 'video');
+    if (!s) return send({ t: 'rtcstat', inbound: false });
+    const d = k => s[k] - ((this.last && this.last[k]) || 0);
+    const perFrame = (k, n) => d(n) > 0 ? +(d(k) / d(n) * 1000).toFixed(1) : null;
+    const jitter = perFrame('jitterBufferDelay', 'jitterBufferEmittedCount');
+    const decode = perFrame('totalDecodeTime', 'framesDecoded');
+    if (jitter !== null && decode !== null) { send({ t: 'delay', ms: jitter + decode }); status(''); }
+    send({ t: 'rtcstat', jitter, decode, target: perFrame('jitterBufferTargetDelay', 'jitterBufferEmittedCount'),
+      packets: s.packetsReceived, lost: s.packetsLost, framesReceived: s.framesReceived, framesDecoded: s.framesDecoded,
+      keyFrames: s.keyFramesDecoded, nack: s.nackCount, pli: s.pliCount, freezes: s.freezeCount,
+      dropped: s.framesDropped, decoder: s.decoderImplementation });
+    this.decoded = s.framesDecoded;
+    this.last = s;
+  },
+  reset() { if (this.pc) this.pc.close(); this.pc = null; },
+  init() {},
+  frame() {},
+};
+
+const player = mode === 'webcodecs' ? wc : mode === 'webrtc' ? rtc : mse;
+
+// ---- audio: raw PCM scheduled with a small jitter buffer -------------------
+// MSE video plays behind real time (the TV buffers it), so there each chunk is scheduled
+// for when the video shows the same capture instant: audio and video share the PC clock,
+// and the MSE timeline is in capture seconds. `offset` corrects for the TV's own display
+// and sound delays (adjust with the remote's left/right keys; remembered on the TV).
+const audio = {
+  ctx: null, rate: 48000, ch: 2, next: 0, drift: 0, resyncs: 0,
+  offset: (() => { try { return +(localStorage.getItem('lancast.av') || 0); } catch (e) { return 0; } })(),
+  setOffset(ms) {
+    this.offset = Math.round(ms);
+    try { localStorage.setItem('lancast.av', this.offset); } catch (e) {}
+    flash(`Audio delay ${this.offset > 0 ? '+' : ''}${this.offset} ms`);
+  },
+  config(c) { this.rate = c.rate; this.ch = c.channels; },
+  state() { return this.ctx ? this.ctx.state : 'off'; },
+  push(data, pts) {
+    if (!this.ctx) {
+      const AC = window.AudioContext || window.webkitAudioContext;
+      try { this.ctx = new AC({ latencyHint: 'interactive', sampleRate: this.rate }); }
+      catch (e) { this.ctx = new AC({ latencyHint: 'interactive' }); }
+    }
+    const ctx = this.ctx;
+    if (ctx.state !== 'running') { hint.style.display = 'block'; ctx.resume().catch(() => {}); return; }
+    if (!flashTimer) hint.style.display = 'none';
+    const n = (data.length / (2 * this.ch)) | 0;
+    if (!n) return;
+    const pcm = new Int16Array(data.buffer, data.byteOffset, n * this.ch);
+    const buf = ctx.createBuffer(this.ch, n, this.rate);
+    for (let c = 0; c < this.ch; c++) {
+      const out = buf.getChannelData(c);
+      for (let i = 0; i < n; i++) out[i] = pcm[i * this.ch + c] / 32768;
+    }
+    const now = ctx.currentTime;
+    if (mode === 'mse') {
+      if (video.paused || !video.currentTime) return; // no picture yet: nothing to sync to
+      // When this chunk should sound, on the AudioContext clock.
+      const want = now + (pts / 1e6 - video.currentTime) + this.offset / 1000;
+      if (want < now) return; // video is already past it
+      // Play chunks back to back; realign only when off by more than ~2 video frames
+      // (smoothed, since the TV reports currentTime in frame steps).
+      this.drift = this.drift * 0.9 + (want - this.next) * 0.1;
+      if (this.next < now + 0.005 || Math.abs(this.drift) > 0.035 || Math.abs(want - this.next) > 0.25) {
+        this.next = want; this.drift = 0; this.resyncs++;
+      }
+    } else if (this.next < now + 0.005 || this.next > now + 0.15) this.next = now + 0.04; // underrun or drift
+    // While MSE video catches up at 1.1x, play audio at the same speed so it stays in sync
+    // without gaps (briefly higher pitch, only after start-up or a stall).
+    const speed = mode === 'mse' ? video.playbackRate : 1;
+    const src = ctx.createBufferSource();
+    src.buffer = buf; src.playbackRate.value = speed; src.connect(ctx.destination); src.start(this.next);
+    this.next += n / this.rate / speed;
+  },
+};
+
+// ---- transport ---------------------------------------------------------------
+// Flow control: tell the PC how far we've read, so it can stop sending (and skip ahead to a
+// keyframe) instead of letting video pile up unseen in TCP buffers when the TV falls behind.
+let lastRx = 0;
+function received(pts, key) {
+  const now = performance.now();
+  if (key || now - lastRx >= 50) { lastRx = now; send({ t: 'rx', pts }); }
+}
+
+function onPacket(buf) {
+  const dv = new DataView(buf);
+  const kind = dv.getUint8(0), key = (dv.getUint8(1) & 1) === 1;
+  const pts = dv.getUint32(2, true) + dv.getUint32(6, true) * 4294967296;
+  const data = new Uint8Array(buf, 10);
+  switch (kind) {
+    case K.VCFG: { const c = decodeText(data); stats.codec = c.codec; stats.size = `${c.width}x${c.height}`; player.config(c); break; }
+    case K.VINIT: player.init(data); break;
+    case K.VIDEO: received(pts, key); player.frame(data, key, pts); break;
+    case K.ACFG: audio.config(decodeText(data)); break;
+    case K.AUDIO: audio.push(data, pts); break;
+  }
+}
+
+function connect() {
+  if (!server) return status('Open LanCast on your PC and press Cast');
+  const code = params.get('k'); // access code, when the PC only admits links that carry it
+  ws = new WebSocket(`${location.protocol === 'https:' ? 'wss' : 'ws'}://${server}/ws?mode=${mode}${code ? `&k=${encodeURIComponent(code)}` : ''}`);
+  ws.binaryType = 'arraybuffer';
+  ws.onopen = () => {
+    status('Waiting for picture…');
+    const mseOk = c => window.MediaSource ? MediaSource.isTypeSupported(`video/mp4; codecs="${c}"`) : false;
+    send({ t: 'hello', mode, app: !!app, ua: navigator.userAgent, proto: location.protocol, secure: window.isSecureContext,
+      webcodecs: 'VideoDecoder' in window, webrtc: 'RTCPeerConnection' in window,
+      mse: { h264: mseOk('avc1.640033'), hevc: mseOk('hvc1.1.6.L153.90'), av1: mseOk('av01.0.13M.08') } });
+  };
+  ws.onmessage = e => {
+    if (typeof e.data !== 'string') return onPacket(e.data);
+    const m = JSON.parse(e.data);
+    if (m.t === 'answer') rtc.answer(m.sdp);
+    if (m.t === 'clock') pcClockOffset = m.ms - Date.now();
+    if (m.t === 'denied') denied();
+  };
+  ws.onclose = () => { player.reset(); status('Reconnecting…'); reloadWhenServerIsBack(); };
+}
+
+// The PC's "Who can watch" setting excludes this device: say so instead of reconnecting
+// right away, and check again now and then in case the setting changes.
+function denied() {
+  ws.onclose = null;
+  player.reset();
+  status('This device isn’t allowed to watch.\nChange “Who can watch” in LanCast on your PC.');
+  setTimeout(() => location.reload(), 10000);
+}
+
+// Reload (rather than reconnect) so the page always runs the server's current code and settings.
+function reloadWhenServerIsBack() {
+  // no-cors: the TV app (file:// origin) only needs to know the server answers.
+  fetch(`${location.protocol === 'https:' ? 'https' : 'http'}://${server}/`, { cache: 'no-store', mode: 'no-cors' })
+    .then(() => location.reload())
+    .catch(() => setTimeout(reloadWhenServerIsBack, 1000));
+}
+
+// Any remote key / click unlocks audio and goes fullscreen; "i" or the info/red key toggles stats.
+function interact(e) {
+  if (audio.ctx) audio.ctx.resume().catch(() => {});
+  const el = document.documentElement;
+  if (!document.fullscreenElement && el.requestFullscreen) el.requestFullscreen().catch(() => {});
+  if (e && (e.key === 'i' || e.keyCode === 457 || e.keyCode === 403)) {
+    hud.style.display = hud.style.display === 'block' ? 'none' : 'block';
+  }
+  if (e && e.key === 'ArrowRight') audio.setOffset(audio.offset + 20);
+  if (e && e.key === 'ArrowLeft') audio.setOffset(audio.offset - 20);
+}
+// Brief on-screen message (reuses the sound hint's spot).
+let flashTimer = 0;
+function flash(text) {
+  hint.textContent = text; hint.style.display = 'block';
+  clearTimeout(flashTimer);
+  flashTimer = setTimeout(() => { flashTimer = 0; hint.style.display = 'none'; hint.textContent = 'Press OK to enable sound'; }, 1500);
+}
+// Average brightness of a few canvas pixels (canvas-rendered players only): proves real
+// image data reaches the screen, since TVs may hide decoded frames from the page.
+function canvasBrightness() {
+  const ctx = (mode === 'webcodecs' ? wc : rtc).ctx;
+  if (mode === 'mse' || !ctx || !canvas.width) return null;
+  let sum = 0;
+  for (const [x, y] of [[0.5, 0.5], [0.25, 0.25], [0.75, 0.75], [0.25, 0.75], [0.75, 0.25]]) {
+    const d = ctx.getImageData(Math.floor(canvas.width * x), Math.floor(canvas.height * y), 1, 1).data;
+    sum += (d[0] + d[1] + d[2]) / 3;
+  }
+  return Math.round(sum / 5);
+}
+
+// Telemetry back to the PC log: the TV has no developer console.
+addEventListener('error', e => log(`error: ${e.message} @${e.lineno}`));
+addEventListener('unhandledrejection', e => log(`rejection: ${e.reason}`));
+video.addEventListener('waiting', () => {
+  mse.stalls++;
+  const b = video.buffered, lag = b.length ? b.end(b.length - 1) - video.currentTime : -1;
+  log(`stall at ${video.currentTime.toFixed(3)}, ${lag.toFixed(3)} s buffered, rate ${video.playbackRate}`);
+});
+video.addEventListener('error', () => log(`video error: ${video.error && video.error.message}`));
+setInterval(() => {
+  const b = video.buffered, r = x => +x.toFixed(3);
+  const ranges = Array.from({ length: b.length }, (_, i) => [r(b.start(i)), r(b.end(i))]);
+  const q = video.getVideoPlaybackQuality ? video.getVideoPlaybackQuality() : {};
+  if (mode === 'webrtc') rtc.sample();
+  const frames = mode === 'mse' ? q.totalVideoFrames || 0 : mode === 'webrtc' ? rtc.decoded : stats.frames;
+  stats.fps = Math.round((frames - stats.counted) / 2);
+  stats.counted = frames;
+  if (mode === 'mse' && !video.paused && video.currentTime > 0) ack(Math.round(video.currentTime * 1e6));
+  $('hudText').textContent = `${mode}  ${stats.codec}  ${stats.size}\n${stats.fps} fps  audio: ${audio.state()}`;
+  send({ t: 'stat', fps: stats.fps, brightness: canvasBrightness(), ready: video.readyState, net: video.networkState, paused: video.paused,
+    time: r(video.currentTime), ranges: ranges.slice(-3), nranges: ranges.length, seeks: mse.seeks, stalls: mse.stalls,
+    lag: b.length ? r(b.end(b.length - 1) - video.currentTime) : null,
+    decoded: q.totalVideoFrames, dropped: q.droppedVideoFrames, size: `${video.videoWidth}x${video.videoHeight}`,
+    rates: mse.rates, audio: audio.state(), av: audio.offset, resyncs: audio.resyncs });
+}, 2000);
+// TV browsers keep background tabs alive, and their few hardware decoders / WebRTC
+// resources with them. Release everything when hidden; start fresh when shown again.
+document.addEventListener('visibilitychange', () => {
+  if (!document.hidden) return location.reload();
+  if (ws) { ws.onclose = null; ws.close(); }
+  player.reset();
+  video.removeAttribute('src');
+  video.srcObject = null;
+  if (audio.ctx) audio.ctx.suspend();
+});
+addEventListener('keydown', interact);
+addEventListener('click', interact);
+if (params.get('hud') === '1') hud.style.display = 'block';
+
+// Latency check: the PC's clock *now* (sent outside the video pipeline). Compare it with the
+// LanCast clock page (/clock) shown in the video; the difference is the real glass-to-glass delay.
+let pcClockOffset = null;
+(function drawClock() {
+  if (hud.style.display === 'block' && pcClockOffset !== null) {
+    $('pcclock').textContent = `PC ${(((Date.now() + pcClockOffset) / 1000) % 60).toFixed(1).padStart(4, '0')}`;
+  }
+  requestAnimationFrame(drawClock);
+})();
+if (!document.hidden) connect(); // hidden tabs start when shown (see visibilitychange)
+</script>
+</body>
+</html>

@@ -1,0 +1,13 @@
+{
+  "id": "com.lancast.player",
+  "version": "1.0.0",
+  "vendor": "LanCast",
+  "type": "web",
+  "main": "index.html",
+  "title": "LanCast",
+  "icon": "icon.png",
+  "largeIcon": "largeIcon.png",
+  "bgColor": "#000000",
+  "resolution": "1920x1080",
+  "disableBackHistoryAPI": true
+}
