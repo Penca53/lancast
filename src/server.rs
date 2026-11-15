@@ -51,6 +51,8 @@ const ERROR_SHOWN_FOR: Duration = Duration::from_secs(3);
 #[derive(Clone, Debug, PartialEq)]
 pub struct Viewer {
     pub ip: IpAddr,
+    /// Connected from this machine (any of its addresses).
+    pub this_pc: bool,
     /// Decode path (`mse`, `webrtc`, ...), as requested until the player says hello.
     pub player: String,
     /// Smoothed capture-to-displayed latency; 0 until the player acknowledges a frame.
@@ -83,9 +85,9 @@ impl Stats {
         self.viewers.lock().unwrap().values().map(|v| v.latency_us).max().unwrap_or(0)
     }
 
-    fn add_viewer(&self, ip: IpAddr, player: &str) -> u64 {
+    fn add_viewer(&self, ip: IpAddr, this_pc: bool, player: &str) -> u64 {
         let id = self.next_viewer.fetch_add(1, Ordering::Relaxed);
-        self.viewers.lock().unwrap().insert(id, Viewer { ip, player: player.to_owned(), latency_us: 0 });
+        self.viewers.lock().unwrap().insert(id, Viewer { ip, this_pc, player: player.to_owned(), latency_us: 0 });
         id
     }
 
@@ -202,10 +204,10 @@ fn session<R: Read + Send + 'static, W: Write>(
         log::info!("refused viewer {} (not allowed by \"Who can watch\")", peer.addr);
         return deny(&mut w);
     }
-    let peer = peer.addr;
+    let (this_pc, peer) = (peer.this_pc, peer.addr);
     log::info!("viewer connected: {peer}");
     let mode = head.param("mode").unwrap_or_default();
-    let viewer = ViewerEntry::add(stats, peer.ip(), mode);
+    let viewer = ViewerEntry::add(stats, peer.ip(), this_pc, mode);
     let id = viewer.1;
     let sub = hub.subscribe();
     // WebRTC: video travels over RTP from a peer thread; the WebSocket carries signalling + audio.
@@ -316,8 +318,8 @@ fn session<R: Read + Send + 'static, W: Write>(
 struct ViewerEntry<'a>(&'a Stats, u64);
 
 impl<'a> ViewerEntry<'a> {
-    fn add(stats: &'a Stats, ip: IpAddr, player: &str) -> Self {
-        ViewerEntry(stats, stats.add_viewer(ip, player))
+    fn add(stats: &'a Stats, ip: IpAddr, this_pc: bool, player: &str) -> Self {
+        ViewerEntry(stats, stats.add_viewer(ip, this_pc, player))
     }
 }
 
@@ -661,7 +663,7 @@ mod tests {
     #[test]
     fn latency_is_tracked_per_viewer() {
         let stats = Stats::default();
-        let (tv, phone) = (stats.add_viewer([10, 0, 0, 2].into(), "mse"), stats.add_viewer([10, 0, 0, 3].into(), "webcodecs"));
+        let (tv, phone) = (stats.add_viewer([10, 0, 0, 2].into(), false, "mse"), stats.add_viewer([10, 0, 0, 3].into(), false, "webcodecs"));
         stats.record_latency(tv, 130_000);
         stats.record_latency(phone, 5_000);
         assert_eq!(stats.latency_us(), 130_000, "the slowest screen, not a blend");
@@ -669,7 +671,7 @@ mod tests {
         assert_eq!(stats.viewers()[1].latency_us, (5_000 * 7 + 13_000) / 8);
         stats.remove_viewer(tv);
         assert_eq!(stats.latency_us(), 6_000);
-        let again = stats.add_viewer([10, 0, 0, 2].into(), "mse");
+        let again = stats.add_viewer([10, 0, 0, 2].into(), false, "mse");
         assert_eq!(stats.viewers().iter().find(|v| v.ip == IpAddr::from([10, 0, 0, 2])).unwrap().latency_us, 0, "a new session starts fresh");
         stats.remove_viewer(again);
     }

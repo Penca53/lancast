@@ -5,6 +5,7 @@ use crate::{
     discovery::{self, Device},
     engine::Engine,
     platform,
+    server::Viewer,
 };
 use eframe::egui::{self, Color32, RichText};
 use std::{
@@ -575,10 +576,29 @@ and an AV1-capable TV (e.g. LG 2022+).",
                 ui.end_row();
             });
             ui.add_space(4.0);
-            let mut players: Vec<_> = st.viewers().into_iter().map(|v| v.player).collect();
-            players.sort();
-            players.dedup();
-            ui.label(RichText::new(format!("{}  ·  player: {}", st.status.lock().unwrap(), players.join(", "))).weak().small());
+            ui.label(RichText::new(st.status.lock().unwrap().as_str()).weak().small());
+            ui.add_space(8.0);
+            ui.label(RichText::new("Watching now").small().strong());
+            egui::Grid::new("viewers").num_columns(3).spacing([18.0, 2.0]).show(ui, |ui| {
+                for v in st.viewers() {
+                    ui.label(self.viewer_name(&v));
+                    ui.label(RichText::new(&v.player).weak());
+                    ui.label(if v.latency_us > 0 { format!("{:.0} ms", v.latency_us as f64 / 1e3) } else { "…".to_owned() });
+                    ui.end_row();
+                }
+            });
         });
+    }
+
+    /// A viewer's address, with the TV's name when it's one we know.
+    fn viewer_name(&self, v: &Viewer) -> String {
+        if v.this_pc {
+            return "This PC".to_owned();
+        }
+        let ip = v.ip.to_string();
+        match self.devices.iter().find(|d| d.ip == ip) {
+            Some(d) => format!("{} ({ip})", d.name),
+            None => ip,
+        }
     }
 }
