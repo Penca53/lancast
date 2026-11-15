@@ -41,6 +41,8 @@ enum Msg {
     Prompt(String),
     Cast(String, Result<(), String>),
     Stopped,
+    /// Codecs the GPU behind a monitor (by index) can encode.
+    Encoders(usize, Vec<Codec>),
 }
 
 /// Smoothed throughput derived from the engine's counters.
@@ -64,6 +66,8 @@ struct App {
     busy: Option<String>,
     casting: Option<String>,
     monitors: Vec<platform::Monitor>,
+    /// Monitor index whose GPU encoders are known (or being checked: `None`).
+    encoders: (usize, Option<Vec<Codec>>),
     rates: Rates,
     tx: Sender<Msg>,
     rx: Receiver<Msg>,
@@ -83,13 +87,25 @@ impl App {
             busy: None,
             casting: None,
             monitors: platform::monitors(),
+            encoders: (usize::MAX, None),
             rates: Rates::default(),
             tx,
             rx,
             ctx,
         };
         app.scan();
+        app.check_encoders();
         app
+    }
+
+    /// Finds out (in the background) which codecs the selected monitor's GPU can encode.
+    fn check_encoders(&mut self) {
+        let monitor = self.draft.monitor;
+        if self.encoders.0 == monitor {
+            return;
+        }
+        self.encoders = (monitor, None);
+        self.background(move |tx| drop(tx.send(Msg::Encoders(monitor, platform::encoders(monitor)))));
     }
 
     /// Runs `f` on a worker thread and wakes the UI when it reports back.
@@ -156,6 +172,8 @@ impl App {
                     self.busy = None;
                     self.casting = None;
                 }
+                Msg::Encoders(monitor, codecs) if monitor == self.encoders.0 => self.encoders.1 = Some(codecs),
+                Msg::Encoders(..) => {} // for a monitor no longer selected
             }
         }
     }
@@ -221,6 +239,7 @@ impl eframe::App for App {
                 self.stats_ui(ui);
             });
         });
+        self.check_encoders(); // the monitor may have changed
         // Apply settings once the user stops dragging (avoids restarting mid-drag). The engine's
         // own state (see `apply_user_settings`) is mirrored so it doesn't count as an edit.
         let current = self.engine.settings();
@@ -456,7 +475,12 @@ Needs a TV that decodes HEVC (most 4K TVs do).",
 Needs an AV1 encoder on the PC (RTX 40+, Radeon RX 7000+, Intel Arc)
 and an AV1-capable TV (e.g. LG 2022+).",
                         };
-                        ui.selectable_value(&mut s.codec, codec, codec.label()).on_hover_text(hint);
+                        // Unknown (still checking, or the check failed): leave it to the pipeline.
+                        let encodable = self.encoders.1.as_ref().is_none_or(|list| list.is_empty() || list.contains(&codec));
+                        ui.add_enabled_ui(encodable, |ui| ui.selectable_value(&mut s.codec, codec, codec.label()))
+                            .inner
+                            .on_hover_text(hint)
+                            .on_disabled_hover_text(format!("This PC's graphics can't encode {} in hardware.", codec.label()));
                     }
                 });
                 ui.end_row();

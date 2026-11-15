@@ -116,6 +116,14 @@ fn pipeline_av1() {
 
 #[test]
 #[ignore = "needs a display and a hardware encoder"]
+fn lists_hardware_encoders() {
+    let codecs = crate::platform::encoders(0);
+    println!("hardware encoders: {codecs:?}");
+    assert!(codecs.contains(&Codec::H264), "every supported GPU encodes H.264");
+}
+
+#[test]
+#[ignore = "needs a display and a hardware encoder"]
 fn pipeline_restarts_on_settings_change() {
     let engine = start(Settings::default());
     let mut s = viewer(engine.port, "");

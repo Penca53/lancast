@@ -1,5 +1,5 @@
 //! Platform-specific capture and encoding. Each platform provides:
-//! `monitors()`, `run_video(settings, hub, stats, stop)` and `run_audio(hub, stop)`.
+//! `monitors()`, `encoders(monitor)`, `run_video(settings, hub, stats, stop)` and `run_audio(hub, stop)`.
 
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct Monitor {
@@ -12,14 +12,21 @@ pub struct Monitor {
 #[cfg(windows)]
 mod windows;
 #[cfg(windows)]
-pub use self::windows::{monitors, run_audio, run_video};
+pub use self::windows::{encoders, monitors, run_audio, run_video};
 
 #[cfg(not(windows))]
 mod unsupported {
-    use crate::{config::Settings, server::Stats, stream::Hub};
+    use crate::{
+        config::{Codec, Settings},
+        server::Stats,
+        stream::Hub,
+    };
     use std::sync::atomic::AtomicBool;
 
     pub fn monitors() -> Vec<super::Monitor> {
+        Vec::new()
+    }
+    pub fn encoders(_: usize) -> Vec<Codec> {
         Vec::new()
     }
     pub fn run_video(_: &Settings, _: &Hub, _: &Stats, _: &AtomicBool) -> anyhow::Result<()> {
@@ -30,4 +37,4 @@ mod unsupported {
     }
 }
 #[cfg(not(windows))]
-pub use unsupported::{monitors, run_audio, run_video};
+pub use unsupported::{encoders, monitors, run_audio, run_video};

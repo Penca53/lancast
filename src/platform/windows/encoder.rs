@@ -74,6 +74,19 @@ fn find_encoder(gpu: &Gpu, subtype: GUID) -> Result<(IMFActivate, String)> {
     }
 }
 
+fn subtype(codec: Codec) -> GUID {
+    match codec {
+        Codec::H264 => MFVideoFormat_H264,
+        Codec::Hevc => MFVideoFormat_HEVC,
+        Codec::Av1 => MFVideoFormat_AV1,
+    }
+}
+
+/// Whether `gpu` has a hardware encoder for `codec`.
+pub fn available(gpu: &Gpu, codec: Codec) -> bool {
+    find_encoder(gpu, subtype(codec)).is_ok()
+}
+
 fn set(api: &ICodecAPI, key: &GUID, value: VARIANT) {
     if let Err(e) = unsafe { api.SetValue(key, &value) } {
         log::debug!("encoder ignores {key:?}: {e}");
@@ -100,11 +113,7 @@ fn media_type(subtype: &GUID, w: u32, h: u32, fps: u32) -> Result<IMFMediaType> 
 
 impl Encoder {
     pub fn new(gpu: &Gpu, codec: Codec, w: u32, h: u32, fps: u32, rate: RateControl) -> Result<Encoder> {
-        let subtype = match codec {
-            Codec::H264 => MFVideoFormat_H264,
-            Codec::Hevc => MFVideoFormat_HEVC,
-            Codec::Av1 => MFVideoFormat_AV1,
-        };
+        let subtype = subtype(codec);
         let (activate, name) = find_encoder(gpu, subtype)?;
         unsafe {
             let mft: IMFTransform = activate.ActivateObject()?;

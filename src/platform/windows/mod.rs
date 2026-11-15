@@ -70,6 +70,16 @@ impl Drop for MfSession {
     }
 }
 
+/// Codecs the GPU driving monitor `index` can encode in hardware (empty if it can't be checked).
+pub fn encoders(index: usize) -> Vec<Codec> {
+    com_init();
+    let Ok(_mf) = MfSession::start() else { return Vec::new() };
+    let monitors = gpu::monitor_handles();
+    let Some((handle, _)) = monitors.get(index).or(monitors.first()) else { return Vec::new() };
+    let Ok(gpu) = gpu::Gpu::for_monitor(*handle) else { return Vec::new() };
+    Codec::ALL.into_iter().filter(|&c| encoder::available(&gpu, c)).collect()
+}
+
 pub fn run_video(s: &Settings, hub: &Hub, stats: &Stats, stop: &AtomicBool) -> Result<()> {
     com_init();
     let _mf = MfSession::start()?;
