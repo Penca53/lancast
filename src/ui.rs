@@ -8,6 +8,7 @@ use crate::{
 };
 use eframe::egui::{self, Color32, RichText};
 use std::{
+    collections::BTreeSet,
     sync::{
         Arc,
         atomic::Ordering,
@@ -40,7 +41,7 @@ enum Msg {
     Devices(Vec<Device>),
     Prompt(String),
     Cast(String, Result<(), String>),
-    Stopped,
+    Stopped(String),
     /// Codecs the GPU behind a monitor (by index) can encode.
     Encoders(usize, Vec<Codec>),
 }
@@ -64,7 +65,8 @@ struct App {
     /// Per-device transient state: (ip, message, is_error).
     note: Option<(String, String, bool)>,
     busy: Option<String>,
-    casting: Option<String>,
+    /// TVs we cast to and haven't stopped.
+    casting: BTreeSet<String>,
     monitors: Vec<platform::Monitor>,
     /// Monitor index whose GPU encoders are known (or being checked: `None`).
     encoders: (usize, Option<Vec<Codec>>),
@@ -85,7 +87,7 @@ impl App {
             manual_ip: String::new(),
             note: None,
             busy: None,
-            casting: None,
+            casting: BTreeSet::new(),
             monitors: platform::monitors(),
             encoders: (usize::MAX, None),
             rates: Rates::default(),
@@ -147,7 +149,7 @@ impl App {
             if let Err(e) = engine.stop_webos(&ip) {
                 log::warn!("closing TV browser: {e:#}");
             }
-            let _ = tx.send(Msg::Stopped);
+            let _ = tx.send(Msg::Stopped(ip));
         });
     }
 
@@ -162,15 +164,15 @@ impl App {
                 Msg::Cast(ip, Ok(())) => {
                     self.busy = None;
                     self.note = None;
-                    self.casting = Some(ip);
+                    self.casting.insert(ip);
                 }
                 Msg::Cast(ip, Err(e)) => {
                     self.busy = None;
                     self.note = Some((ip, e, true));
                 }
-                Msg::Stopped => {
+                Msg::Stopped(ip) => {
                     self.busy = None;
-                    self.casting = None;
+                    self.casting.remove(&ip);
                 }
                 Msg::Encoders(monitor, codecs) if monitor == self.encoders.0 => self.encoders.1 = Some(codecs),
                 Msg::Encoders(..) => {} // for a monitor no longer selected
@@ -310,7 +312,7 @@ impl App {
                     });
                     ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
                         let busy = self.busy.as_deref() == Some(d.ip.as_str());
-                        let live = self.casting.as_deref() == Some(d.ip.as_str());
+                        let live = self.casting.contains(&d.ip);
                         if busy {
                             ui.spinner();
                         } else if live {
@@ -356,7 +358,8 @@ impl App {
 
     fn link_ui(&mut self, ui: &mut egui::Ui) {
         section(ui, "LINK");
-        let url = self.engine.url_for(self.casting.as_deref());
+        // As reachable from a TV being cast to (it picks the network interface), if any.
+        let url = self.engine.url_for(self.casting.first().map(String::as_str));
         card(ui, |ui| {
             ui.horizontal(|ui| {
                 ui.label(RichText::new(&url).monospace().color(ACCENT));
