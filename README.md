@@ -35,9 +35,13 @@ LanCast opens that browser for you.
 | This PC only | Browsers on this PC |
 
 Changing it cuts off players it no longer admits; they show why and check again every 10 s.
+While someone watches, **Live** lists each viewer with its player and latency.
 
 On the TV remote: **OK** turns on sound and full screen (browsers block sound until a key is pressed).
 **Red** or **Info** shows live stats.
+
+If the PC can't stream (for example, no hardware encoder for the chosen codec), the app says why
+and so does the TV. Codecs the PC's graphics can't encode are greyed out.
 
 CLI, handy for scripts and testing:
 
@@ -48,7 +52,18 @@ lancast --headless --cast 192.168.1.50 --seconds 30   # cast to a webOS TV for 3
         [--preset ultra|balanced|wifi] [--height 2160] [--fps 60] [--kbps 40000]
         [--codec h264|hevc|av1] [--player auto|webrtc|webcodecs|mse] [--http|--https]
         [--visibility network|cast|code|pc]
+        [--hud]                                       # stats overlay on the TV
+        [--browser]                                   # cast to the TV's browser even if the TV app is installed
+lancast --export-webos-app lancast-tvapp              # write the webOS TV app (see below)
 ```
+
+### LanCast TV app (optional, LG webOS)
+
+The same player, packaged to run from the TV instead of being served to its browser. A page
+running from the TV counts as a secure context, which browsers require for WebCodecs.
+`lancast --export-webos-app <dir>` writes the app; package it with `ares-package <dir>` and
+install it with `ares-install` (the TV must be in developer mode). With **Use TV app** on (the
+default), Cast opens the app when it's installed and the browser otherwise.
 
 ## How it works
 
@@ -57,14 +72,15 @@ lancast --headless --cast 192.168.1.50 --seconds 30   # cast to a webOS TV for 3
    (GPU texture, cursor,      (BGRA→NV12 BT.709,       (NVENC / AMF / QSV, low-     ├─► WebSocket: WebCodecs (secure pages only)
     constant frame rate)       scaling, on GPU)          latency, no B-frames,       └─► WebSocket: fMP4 for MSE (fallback)
                                                           on-demand IDR)
- WASAPI loopback ──────────────────────────────────────► s16 PCM over WebSocket ─────────────────────────► WebAudio, 40 ms jitter buffer
+ WASAPI loopback ──────────────────────────────────────► s16 PCM over WebSocket ─────────────────────────► WebAudio, synced to the video
 ```
 
 - Frames never leave the GPU until they're compressed.
 - The encoder gets a **constant frame rate**: an unchanged screen is re-sent as tiny "skip" frames,
   which keeps TV decoders' timelines gap-free.
-- Keyframes are sent **on demand** (new viewer, loss), at most every 500 ms, so there are no
-  periodic bitrate spikes.
+- Keyframes are sent **on demand** (new viewer, loss, and every ~3 s for MSE players, which can
+  only trim their buffers at one), so there's no fixed keyframe interval. WebRTC receivers' requests
+  are limited to one every 500 ms.
 - **Paced UDP:** WebRTC packets are released at a capped rate (≤95 Mbit/s unless the stream needs more),
   so a frame doesn't hit the network as one 10 GbE burst that overflows a 100 Mbit TV port.
 - The player reports back what it decoded/displayed, so **"ms to screen"** is measured, not guessed.
@@ -145,7 +161,7 @@ flash don't coincide on the TV, press **left/right** on the remote to shift the 
 
 **Advanced** options: monitor, output resolution (native, 2160p/4K, 1440p, 1080p, 720p; scales up or
 down on the GPU), 30/60/120 fps, codec, constant bitrate or constant quality, player (Auto/WebCodecs/WebRTC/MSE), audio,
-cursor, HTTPS. Settings and the TLS certificate live in `%APPDATA%\lancast\`.
+cursor, TV app, stats on TV, HTTPS. Settings and the TLS certificate live in `%APPDATA%\lancast\`.
 
 **Codecs** (8-bit 4:2:0, hardware-encoded, all three players):
 
@@ -174,24 +190,29 @@ MSE, and MSE shows "This TV can't play … video" instead of a black screen.
 
 | Module | Role |
 |---|---|
+| `main.rs` | Command line: GUI, headless, discovery, TV app export |
 | `engine.rs` | Runs the pipeline only while someone watches; restarts it when settings change; cast/stop |
+| `config.rs` | Settings, presets, persistence, output size and pacing rules |
 | `stream.rs` | Packet wire format, fan-out `Hub`, newest-only `Latest` slot |
-| `server.rs` | HTTP + HTTPS on one port, WebSocket sessions, player telemetry, stats |
+| `server.rs` | HTTP + HTTPS on one port, WebSocket sessions, player telemetry, per-viewer stats |
 | `access.rs` | "Who can watch" policy and access codes |
 | `webrtc.rs` | ICE-lite WebRTC peer (str0m), paced UDP sender |
 | `tls.rs` | Self-signed server cert (full-duplex rustls), unverified client for the TV |
 | `http.rs`, `ws.rs` | Minimal HTTP/1.1 and RFC 6455 (server and client) |
 | `codec.rs`, `fmp4.rs` | H.264/HEVC NAL and AV1 OBU parsing, codec strings, fMP4 muxer for MSE |
+| `audio.rs`, `clock.rs` | Sample conversion to s16 stereo; the shared capture clock |
 | `discovery.rs`, `webos.rs` | SSDP discovery, LG SSAP pairing and app launching |
-| `platform/windows/` | Capture, GPU colour conversion, MF encoder, WASAPI |
-| `web/player.html` | The TV-side player (embedded in the binary) |
+| `tvapp.rs`, `tvapp/` | The webOS TV app: player plus launch-parameter bootstrap, icons, `appinfo.json` |
+| `platform/` | OS interface (`monitors`, `encoders`, `run_video`, `run_audio`); `windows/`: capture, GPU colour conversion, MF encoder, WASAPI |
+| `web/player.html`, `web/clock.html` | The TV-side player and the latency-check clock (embedded in the binary) |
 | `ui.rs` | egui desktop window |
+| `smoke.rs` | Hardware smoke tests (`#[ignore]`d) |
 
 ## Tests
 
 ```
 cargo test                                         # unit tests (no hardware needed)
-cargo test --release -- --ignored --skip tv_       # hardware smoke tests: capture, NVENC/AMF/QSV, H.264+HEVC+AV1, MSE, restarts
+cargo test --release -- --ignored --skip tv_ --test-threads=1   # hardware smoke tests: capture, NVENC/AMF/QSV, H.264+HEVC+AV1, MSE, restarts
 $env:LANCAST_TV="192.168.1.50"; cargo test --release tv_ -- --ignored --nocapture   # cast to a real TV, print latency
 ```
 

@@ -22,7 +22,8 @@ cargo test --locked                                   # unit tests, no hardware 
 Hardware tests (need a display and a GPU encoder; run when touching capture, encoding or the pipeline):
 
 ```sh
-cargo test --release -- --ignored --skip tv_          # capture, NVENC/AMF/QSV, H.264/HEVC/AV1, MSE, restarts
+cargo test --release -- --ignored --skip tv_ --test-threads=1   # capture, NVENC/AMF/QSV, H.264/HEVC/AV1, MSE, restarts
+                                                      # (one at a time: parallel pipelines share the GPU and miss 4K60)
 LANCAST_TV=<ip> cargo test --release tv_ -- --ignored --nocapture   # casts to a real LG webOS TV
 ```
 
@@ -37,7 +38,7 @@ The module table in README's "Code map" is the reference; keep it current. Thing
 - `src/web/player.html` and `clock.html` are embedded with `include_str!`. Editing them needs a
   rebuild; there is no separate web build or JS tooling.
 - `src/platform/` is the only OS-specific code. `platform/mod.rs` defines the interface
-  (`monitors`, `run_video`, `run_audio`) and a non-Windows stub that must keep compiling.
+  (`monitors`, `encoders`, `run_video`, `run_audio`) and a non-Windows stub that must keep compiling.
 - `src/smoke.rs` holds the `#[ignore]`d hardware tests; unit tests live next to the code.
 - `docs/` is the GitHub Pages website (one static `index.html`, no build step).
 - `src/webos_manifest.json` is LG's published Connect SDK manifest. Don't edit it.

@@ -1,5 +1,6 @@
 //! End-to-end smoke tests against real hardware. Ignored by default; run with
-//! `cargo test --release -- --ignored --nocapture`. TV tests need `LANCAST_TV=<ip>`.
+//! `cargo test --release -- --ignored --test-threads=1 --nocapture` (in parallel, pipelines
+//! compete for the GPU). TV tests need `LANCAST_TV=<ip>`.
 
 use crate::{
     clock, codec,
