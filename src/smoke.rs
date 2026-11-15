@@ -69,7 +69,7 @@ fn run_pipeline(codec: Codec) {
     println!("{codec:?}: config {config}, first keyframe {} KB after {startup:?}, audio config: {audio_cfg}", key.len() / 1024);
 
     // On-demand keyframe even when the screen is static, and capture->client latency.
-    let mut lat = Vec::new();
+    let (mut lat, mut audio_age) = (Vec::new(), Vec::new());
     let mut got_key = false;
     send(&mut s, r#"{"t":"key"}"#);
     let t1 = Instant::now();
@@ -80,6 +80,16 @@ fn run_pipeline(codec: Codec) {
             send(&mut s, &format!(r#"{{"t":"ack","pts":{}}}"#, m.pts));
             got_key |= m.key;
         }
+        if m.kind == Kind::Audio as u8 {
+            audio_age.push(clock::now_us() as i64 - m.pts as i64);
+        }
+    }
+    // Audio only flows while the PC plays sound. Its pts are when the PC plays it: the time we
+    // read it, give or take a packet (loopback packets play ~10 ms after they're readable).
+    audio_age.sort_unstable();
+    if let Some(&median) = audio_age.get(audio_age.len() / 2) {
+        println!("{codec:?}: {} audio packets, receive time minus pts p50 {:.1} ms", audio_age.len(), median as f64 / 1e3);
+        assert!(median.abs() < 50_000, "audio pts far from the time it plays");
     }
     assert!(got_key, "requested keyframe never arrived");
     lat.sort_unstable();

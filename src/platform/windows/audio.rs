@@ -15,6 +15,7 @@ use windows::Win32::{
     Media::Audio::*,
     System::{
         Com::{CLSCTX_ALL, CoCreateInstance, CoTaskMemFree},
+        Performance::{QueryPerformanceCounter, QueryPerformanceFrequency},
         Threading::{CreateEventW, WaitForSingleObject},
     },
 };
@@ -64,8 +65,10 @@ pub fn run_audio(hub: &Hub, stop: &AtomicBool) -> Result<()> {
                     continue;
                 }
                 while capture.GetNextPacketSize()? > 0 {
-                    let (mut data, mut frames, mut flags) = (std::ptr::null_mut(), 0u32, 0u32);
-                    capture.GetBuffer(&mut data, &mut frames, &mut flags, None, None)?;
+                    let (mut data, mut frames, mut flags, mut qpc) = (std::ptr::null_mut(), 0u32, 0u32, 0u64);
+                    capture.GetBuffer(&mut data, &mut frames, &mut flags, None, Some(&mut qpc))?;
+                    let timestamp = (flags & AUDCLNT_BUFFERFLAGS_TIMESTAMP_ERROR.0 as u32 == 0).then_some(qpc);
+                    let pts = clock::now_us().saturating_add_signed(playout_offset_us(qpc_now(), timestamp));
                     let bytes = frames as usize * block;
                     let pcm = if flags & AUDCLNT_BUFFERFLAGS_SILENT.0 as u32 != 0 {
                         vec![0u8; frames as usize * 4]
@@ -74,7 +77,7 @@ pub fn run_audio(hub: &Hub, stop: &AtomicBool) -> Result<()> {
                     };
                     capture.ReleaseBuffer(frames)?;
                     if hub.viewers() > 0 {
-                        hub.publish(Packet::new(Kind::Audio, false, clock::now_us(), pcm));
+                        hub.publish(Packet::new(Kind::Audio, false, pts, pcm));
                     }
                 }
             }
@@ -83,5 +86,39 @@ pub fn run_audio(hub: &Hub, stop: &AtomicBool) -> Result<()> {
         let _ = client.Stop();
         let _ = CloseHandle(event);
         result
+    }
+}
+
+/// Performance-counter time now, in the 100 ns units WASAPI timestamps packets with.
+fn qpc_now() -> u64 {
+    let (mut count, mut freq) = (0i64, 0i64);
+    unsafe {
+        let _ = QueryPerformanceCounter(&mut count);
+        let _ = QueryPerformanceFrequency(&mut freq);
+    }
+    (count as u128 * 10_000_000 / freq.max(1) as u128) as u64
+}
+
+/// When the PC plays a packet's first sample, in µs from now (positive: in the future).
+/// Video pts are when the PC shows a frame, so audio pts must be when it plays a sound for
+/// the player to line them up. Loopback packets carry that playout time, about one period
+/// (~10 ms) after they can be read. Without a plausible timestamp: now.
+fn playout_offset_us(now: u64, timestamp: Option<u64>) -> i64 {
+    let offset = timestamp.filter(|&t| t != 0).map(|t| (t as i64 - now as i64) / 10);
+    offset.filter(|o| o.abs() < 1_000_000).unwrap_or(0)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn playout_offset_from_timestamp() {
+        assert_eq!(playout_offset_us(1_000_000, Some(1_106_000)), 10_600, "loopback: plays ~10 ms after reading");
+        assert_eq!(playout_offset_us(1_000_000, Some(800_000)), -20_000);
+        assert_eq!(playout_offset_us(1_000_000, None), 0, "timestamp error flagged");
+        assert_eq!(playout_offset_us(1_000_000, Some(0)), 0, "no timestamp");
+        assert_eq!(playout_offset_us(100_000_000, Some(1)), 0, "implausible");
+        assert!(qpc_now() > 0);
     }
 }
