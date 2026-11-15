@@ -65,7 +65,11 @@ const K = { VCFG: 1, VIDEO: 2, ACFG: 3, AUDIO: 4, VINIT: 5 };
 const decodeText = d => JSON.parse(new TextDecoder().decode(d));
 let ws = null;
 
+// Called with '' on every shown frame (see ack): only touch the page when the text changes.
+let statusText = null;
 function status(text) {
+  if (text === statusText) return;
+  statusText = text;
   $('msgText').textContent = text;
   $('msg').style.display = text ? 'flex' : 'none';
 }
