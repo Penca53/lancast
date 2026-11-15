@@ -6,7 +6,7 @@ use crate::{
     config::{self, pacing_kbps},
     stream::{Hub, Kind, Packet},
 };
-use anyhow::{Context, Result};
+use anyhow::Result;
 use std::{
     net::{IpAddr, SocketAddr, UdpSocket},
     sync::{
@@ -36,8 +36,8 @@ pub enum Msg {
     Close,
 }
 
-/// Runs one peer connection until the viewer's session ends ([`Msg::Close`]) or ICE
-/// disconnects. SDP answers are returned through `answers`.
+/// Runs one peer connection until the viewer's session ends ([`Msg::Close`]) or ICE stays
+/// disconnected. SDP answers are returned through `answers`.
 pub fn run(local_ip: IpAddr, rx: Receiver<Msg>, tx: Sender<Msg>, answers: Sender<String>, hub: Arc<Hub>) -> Result<()> {
     let socket = UdpSocket::bind((local_ip, 0))?;
     let local = socket.local_addr()?;
@@ -61,6 +61,9 @@ struct Pacer {
 const BURST: Duration = Duration::from_millis(2);
 /// Minimum spacing between keyframes sent in response to receiver requests.
 const KEYFRAME_INTERVAL: Duration = Duration::from_millis(500);
+/// How long ICE may stay disconnected before the session ends. A missed consent check or a
+/// network blip disconnects it briefly, and the browser's next nomination reconnects it.
+const ICE_GRACE: Duration = Duration::from_secs(10);
 
 impl Pacer {
     fn spawn(socket: UdpSocket) -> Result<Pacer> {
@@ -134,13 +137,25 @@ fn drive(pacer: &Pacer, local: SocketAddr, rx: Receiver<Msg>, answers: &Sender<S
             hub.request_key();
         }
     };
+    let mut disconnected_since: Option<Instant> = None;
     loop {
+        if disconnected_since.is_some_and(|t| t.elapsed() >= ICE_GRACE) {
+            log::info!("WebRTC: ICE stayed disconnected for {ICE_GRACE:?}, ending the session");
+            return Ok(());
+        }
         let deadline = match &mut rtc {
+            Some(rtc) if !rtc.is_alive() => return Ok(()),
             Some(rtc) => loop {
                 match rtc.poll_output()? {
                     Output::Timeout(t) => break t,
                     Output::Transmit(t) => pacer.send(t.contents.into(), t.destination),
-                    Output::Event(Event::IceConnectionStateChange(IceConnectionState::Disconnected)) => return Ok(()),
+                    Output::Event(Event::IceConnectionStateChange(state)) => {
+                        log::debug!("WebRTC ICE {state:?}");
+                        disconnected_since = match state {
+                            IceConnectionState::Disconnected => disconnected_since.or(Some(Instant::now())),
+                            _ => None,
+                        };
+                    }
                     Output::Event(Event::MediaAdded(m)) if m.kind == MediaKind::Video => {
                         mid = Some(m.mid);
                         video = codec.and_then(|c| video_pt(rtc, m.mid, c)).map(|pt| (m.mid, pt));
@@ -184,10 +199,18 @@ fn drive(pacer: &Pacer, local: SocketAddr, rx: Receiver<Msg>, answers: &Sender<S
                     writer.write(pt, now, rtp_time, p.data.clone())?;
                 }
             }
+            // Anyone on the network can send to our port: a datagram that isn't STUN, DTLS or
+            // RTP for this session must not end it.
             Ok(Msg::Datagram(data, source)) => {
                 if let Some(rtc) = &mut rtc {
-                    let contents = data.as_slice().try_into().context("bad datagram")?;
-                    rtc.handle_input(Input::Receive(now, Receive { proto: Protocol::Udp, source, destination: local, contents }))?;
+                    let Ok(contents) = data.as_slice().try_into() else {
+                        log::debug!("WebRTC: ignoring a non-WebRTC datagram from {source}");
+                        continue;
+                    };
+                    let input = Input::Receive(now, Receive { proto: Protocol::Udp, source, destination: local, contents });
+                    if let Err(e) = rtc.handle_input(input) {
+                        log::debug!("WebRTC: ignoring a datagram from {source}: {e}");
+                    }
                 }
             }
             Err(RecvTimeoutError::Timeout) => {
@@ -231,4 +254,35 @@ fn video_pt(rtc: &mut Rtc, mid: Mid, codec: config::Codec) -> Option<Pt> {
             }
         })
         .map(|p| p.pt())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use str0m::media::Direction;
+
+    #[test]
+    fn stray_datagrams_dont_end_the_session() {
+        let (tx, rx) = mpsc::channel();
+        let (answers_tx, answers) = mpsc::channel();
+        let session = {
+            let tx = tx.clone();
+            thread::spawn(move || run(IpAddr::from([127, 0, 0, 1]), rx, tx, answers_tx, Hub::new()))
+        };
+        // A str0m peer stands in for the browser's receive-only offer.
+        let mut browser = Rtc::new(Instant::now());
+        let mut sdp = browser.sdp_api();
+        sdp.add_media(MediaKind::Video, Direction::RecvOnly, None, None, None);
+        let (offer, _pending) = sdp.apply().unwrap();
+        tx.send(Msg::Offer(offer.to_sdp_string())).unwrap();
+        answers.recv_timeout(Duration::from_secs(2)).expect("SDP answer");
+
+        let from: SocketAddr = "127.0.0.1:9".parse().unwrap();
+        tx.send(Msg::Datagram(vec![0xff; 12], from)).unwrap(); // not STUN, DTLS or RTP
+        tx.send(Msg::Datagram(vec![0x80, 0x60, 0, 1], from)).unwrap(); // truncated RTP
+        thread::sleep(Duration::from_millis(100));
+        assert!(!session.is_finished(), "a stray datagram ended the session");
+        tx.send(Msg::Close).unwrap();
+        session.join().unwrap().unwrap();
+    }
 }
