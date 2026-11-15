@@ -227,7 +227,7 @@ mod tests {
                 let mut r = std::io::BufReader::new(s.try_clone().unwrap());
                 let head = crate::http::read_head(&mut r).unwrap();
                 ws::server_handshake(&mut &s, &head).unwrap();
-                let reg: Value = serde_json::from_str(&ws::read_text(&mut r).unwrap().unwrap()).unwrap();
+                let reg: Value = serde_json::from_str(&ws::read_text(&mut r, 1 << 20).unwrap().unwrap()).unwrap();
                 assert_eq!(reg["type"], "register");
                 (s, r, reg)
             };
@@ -245,7 +245,7 @@ mod tests {
             ws::write_frame(&mut &s, ws::PING, &[b"hb"], None).unwrap();
             assert_eq!(ws::read_message(&mut r).unwrap(), (ws::PONG, b"hb".to_vec()));
             reply(json!({"type":"registered","id":"register_0","payload":{"client-key":"secret"}}));
-            let req: Value = serde_json::from_str(&ws::read_text(&mut r).unwrap().unwrap()).unwrap();
+            let req: Value = serde_json::from_str(&ws::read_text(&mut r, 1 << 20).unwrap().unwrap()).unwrap();
             assert_eq!(req["uri"], "ssap://system.launcher/open");
             assert_eq!(req["payload"]["target"], "http://pc/");
             reply(json!({"type":"response","id":"unrelated","payload":{}}));

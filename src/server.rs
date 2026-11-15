@@ -232,7 +232,7 @@ fn session<R: Read + Send + 'static, W: Write>(
     {
         let (hub, stats, closed, rtc, read_pts) = (hub.clone(), stats.clone(), closed.clone(), rtc.clone(), read_pts.clone());
         thread::spawn(move || {
-            while let Ok(Some(text)) = ws::read_text(&mut reader) {
+            while let Ok(Some(text)) = ws::read_text(&mut reader, MAX_PLAYER_MESSAGE) {
                 on_message(&text, &hub, &stats, id, rtc.as_ref(), &read_pts);
             }
             closed.store(true, Ordering::Relaxed);
@@ -330,6 +330,10 @@ impl Drop for ViewerEntry<'_> {
 }
 
 const CLOCK_INTERVAL: Duration = Duration::from_millis(250);
+
+/// Largest message a player may send. Its biggest, an SDP offer, is a few KB; anything far
+/// larger is a bad peer making us allocate.
+const MAX_PLAYER_MESSAGE: usize = 256 * 1024;
 
 /// Most video (by capture time) allowed between what we send and what the player has read.
 const MAX_IN_FLIGHT_US: u64 = 200_000;

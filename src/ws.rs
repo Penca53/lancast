@@ -62,6 +62,11 @@ pub fn write_frame(w: &mut impl Write, opcode: u8, parts: &[&[u8]], mask: Option
 
 /// Reads one message (reassembling fragments, unmasking client frames).
 pub fn read_message(r: &mut impl Read) -> io::Result<(u8, Vec<u8>)> {
+    read_message_max(r, 64 << 20)
+}
+
+/// Like [`read_message`], refusing messages over `max` bytes (all fragments together).
+pub fn read_message_max(r: &mut impl Read, max: usize) -> io::Result<(u8, Vec<u8>)> {
     let mut opcode = 0;
     let mut payload = Vec::new();
     loop {
@@ -80,8 +85,8 @@ pub fn read_message(r: &mut impl Read) -> io::Result<(u8, Vec<u8>)> {
             }
             n => n as u64,
         };
-        if len > 64 << 20 {
-            return Err(io::Error::new(io::ErrorKind::InvalidData, "frame too large"));
+        if len > (max - payload.len()) as u64 {
+            return Err(io::Error::new(io::ErrorKind::InvalidData, "message too large"));
         }
         let mask = if h[1] & 0x80 != 0 {
             let mut m = [0; 4];
@@ -142,10 +147,10 @@ pub fn is_upgrade(head: &crate::http::Head) -> bool {
     head.header("upgrade").is_some_and(|v| v.eq_ignore_ascii_case("websocket"))
 }
 
-/// Reads the next text message, skipping control frames; `None` on close.
-pub fn read_text(r: &mut impl Read) -> io::Result<Option<String>> {
+/// Reads the next text message of up to `max` bytes, skipping control frames; `None` on close.
+pub fn read_text(r: &mut impl Read, max: usize) -> io::Result<Option<String>> {
     loop {
-        match read_message(r)? {
+        match read_message_max(r, max)? {
             (TEXT, p) => return Ok(Some(String::from_utf8_lossy(&p).into_owned())),
             (CLOSE, _) => return Ok(None),
             _ => continue,
@@ -194,6 +199,23 @@ mod tests {
     }
 
     #[test]
+    fn refuses_messages_over_the_limit_even_when_fragmented() {
+        let mut big = Vec::new();
+        write_frame(&mut big, TEXT, &[&[b'x'; 100]], Some([1, 2, 3, 4])).unwrap();
+        assert!(read_message_max(&mut big.as_slice(), 99).is_err());
+        assert_eq!(read_message_max(&mut big.as_slice(), 100).unwrap().1.len(), 100);
+        // Three 60-byte fragments: each fits, together they don't.
+        let mut frag = vec![0x01, 60];
+        frag.extend([b'a'; 60]);
+        frag.extend([0x00, 60]);
+        frag.extend([b'b'; 60]);
+        frag.extend([0x80, 60]);
+        frag.extend([b'c'; 60]);
+        assert!(read_message_max(&mut frag.as_slice(), 150).is_err());
+        assert_eq!(read_message_max(&mut frag.as_slice(), 180).unwrap().1.len(), 180);
+    }
+
+    #[test]
     fn handshake_between_client_and_server() {
         let listener = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
         let addr = listener.local_addr().unwrap();
@@ -203,7 +225,7 @@ mod tests {
             let head = crate::http::read_head(&mut r).unwrap();
             assert!(is_upgrade(&head));
             server_handshake(&mut &s, &head).unwrap();
-            let msg = read_text(&mut r).unwrap().unwrap();
+            let msg = read_text(&mut r, 1024).unwrap().unwrap();
             write_frame(&mut &s, TEXT, &[msg.to_uppercase().as_bytes()], None).unwrap();
         });
         let mut c = std::net::TcpStream::connect(addr).unwrap();
