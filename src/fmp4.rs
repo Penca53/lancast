@@ -90,7 +90,14 @@ pub fn fragment(seq: u32, dts: u64, duration: u32, key: bool, sample: &[u8]) -> 
         bx(b"moof", &[&full(b"mfhd", 0, 0, &[&seq.to_be_bytes()]), &traf])
     };
     let size = moof(0).len() as u32;
-    [moof(size + 8), bx(b"mdat", &[sample])].concat()
+    let moof = moof(size + 8);
+    // One allocation and one copy of the (large) sample.
+    let mut out = Vec::with_capacity(moof.len() + 8 + sample.len());
+    out.extend_from_slice(&moof);
+    out.extend_from_slice(&(8 + sample.len() as u32).to_be_bytes());
+    out.extend_from_slice(b"mdat");
+    out.extend_from_slice(sample);
+    out
 }
 
 /// Per-viewer converter from Annex-B video packets to fMP4 packets.

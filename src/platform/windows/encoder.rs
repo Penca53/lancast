@@ -4,7 +4,7 @@
 use super::gpu::Gpu;
 use crate::config::{Codec, RateControl};
 use anyhow::{Context, Result, bail};
-use std::{mem::ManuallyDrop, ptr, slice};
+use std::{mem::ManuallyDrop, ptr, slice, sync::Arc};
 use windows::{
     Win32::{
         Graphics::Direct3D11::ID3D11Texture2D,
@@ -32,7 +32,12 @@ unsafe impl Send for Encoder {}
 
 pub enum Event {
     NeedInput,
-    Output { data: Vec<u8>, pts_us: u64, key: bool },
+    /// Encoded access unit, copied once from the encoder into the buffer viewers share.
+    Output {
+        data: Arc<[u8]>,
+        pts_us: u64,
+        key: bool,
+    },
     Other,
 }
 
@@ -245,7 +250,7 @@ impl Encoder {
             let mut p = ptr::null_mut();
             let mut len = 0;
             buffer.Lock(&mut p, None, Some(&mut len))?;
-            let data = slice::from_raw_parts(p, len as usize).to_vec();
+            let data = Arc::from(slice::from_raw_parts(p, len as usize));
             buffer.Unlock()?;
             Ok(Event::Output { data, pts_us, key })
         }
