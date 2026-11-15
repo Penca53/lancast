@@ -54,6 +54,10 @@ function unsupported(c) {
   status(`This TV can't play ${codecName(c)} video.\nChoose another codec in LanCast on your PC.`);
 }
 const canvas = $('c'), video = $('v'), hud = $('hud'), hint = $('hint');
+// Browsers start sound muted until a key press, click or tap; ask in the device's own terms.
+const onTv = !!app || /Web0S|webOS|NetCast|SMART-TV|SmartTV|Tizen|HbbTV/i.test(navigator.userAgent);
+const soundHint = onTv ? 'Press OK to enable sound' : matchMedia('(pointer: coarse)').matches ? 'Tap to enable sound' : 'Click to enable sound';
+hint.textContent = soundHint;
 if (mode === 'mse') canvas.style.display = 'none';
 else if (mode === 'webcodecs') video.style.display = 'none';
 // WebRTC: the video element only feeds the canvas; keep it rendered but invisible
@@ -417,7 +421,7 @@ let flashTimer = 0;
 function flash(text) {
   hint.textContent = text; hint.style.display = 'block';
   clearTimeout(flashTimer);
-  flashTimer = setTimeout(() => { flashTimer = 0; hint.style.display = 'none'; hint.textContent = 'Press OK to enable sound'; }, 1500);
+  flashTimer = setTimeout(() => { flashTimer = 0; hint.style.display = 'none'; hint.textContent = soundHint; }, 1500);
 }
 // Average brightness of a few canvas pixels (canvas-rendered players only): proves real
 // image data reaches the screen, since TVs may hide decoded frames from the page.
