@@ -87,7 +87,7 @@ impl Engine {
         if policy != Policy::from_settings(&before) {
             self.access.set(policy);
         }
-        let restart = |a: &Settings| (a.monitor, a.height, a.fps, a.codec, a.rate, a.audio, a.cursor);
+        let restart = |a: &Settings| (a.display.clone(), a.height, a.fps, a.codec, a.rate, a.audio, a.cursor);
         if restart(&s) != restart(&before) {
             self.generation.fetch_add(1, Ordering::Relaxed);
         }

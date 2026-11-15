@@ -127,7 +127,7 @@ fn pipeline_av1() {
 #[test]
 #[ignore = "needs a display and a hardware encoder"]
 fn lists_hardware_encoders() {
-    let codecs = crate::platform::encoders(0);
+    let codecs = crate::platform::encoders("");
     println!("hardware encoders: {codecs:?}");
     assert!(codecs.contains(&Codec::H264), "every supported GPU encodes H.264");
 }

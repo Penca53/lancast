@@ -43,8 +43,8 @@ enum Msg {
     Prompt(String),
     Cast(String, Result<(), String>),
     Stopped(String),
-    /// Codecs the GPU behind a monitor (by index) can encode.
-    Encoders(usize, Vec<Codec>),
+    /// Codecs the GPU behind a display (by name) can encode.
+    Encoders(Vec<Codec>, String),
 }
 
 /// What a click on a TV's card asks for (by IP).
@@ -77,8 +77,8 @@ struct App {
     /// TVs we cast to and haven't stopped.
     casting: BTreeSet<String>,
     monitors: Vec<platform::Monitor>,
-    /// Monitor index whose GPU encoders are known (or being checked: `None`).
-    encoders: (usize, Option<Vec<Codec>>),
+    /// Display whose GPU encoders were checked, and the result (`None` while checking).
+    encoders: (Option<String>, Option<Vec<Codec>>),
     rates: Rates,
     tx: Sender<Msg>,
     rx: Receiver<Msg>,
@@ -98,7 +98,7 @@ impl App {
             busy: None,
             casting: BTreeSet::new(),
             monitors: platform::monitors(),
-            encoders: (usize::MAX, None),
+            encoders: (None, None),
             rates: Rates::default(),
             tx,
             rx,
@@ -111,12 +111,12 @@ impl App {
 
     /// Finds out (in the background) which codecs the selected monitor's GPU can encode.
     fn check_encoders(&mut self) {
-        let monitor = self.draft.monitor;
-        if self.encoders.0 == monitor {
+        let display = self.draft.display.clone();
+        if self.encoders.0.as_ref() == Some(&display) {
             return;
         }
-        self.encoders = (monitor, None);
-        self.background(move |tx| drop(tx.send(Msg::Encoders(monitor, platform::encoders(monitor)))));
+        self.encoders = (Some(display.clone()), None);
+        self.background(move |tx| drop(tx.send(Msg::Encoders(platform::encoders(&display), display))));
     }
 
     /// Runs `f` on a worker thread and wakes the UI when it reports back.
@@ -183,7 +183,7 @@ impl App {
                     self.busy = None;
                     self.casting.remove(&ip);
                 }
-                Msg::Encoders(monitor, codecs) if monitor == self.encoders.0 => self.encoders.1 = Some(codecs),
+                Msg::Encoders(codecs, display) if self.encoders.0.as_ref() == Some(&display) => self.encoders.1 = Some(codecs),
                 Msg::Encoders(..) => {} // for a monitor no longer selected
             }
         }
@@ -449,11 +449,12 @@ impl App {
         egui::CollapsingHeader::new("Advanced").show(ui, |ui| {
             egui::Grid::new("advanced").num_columns(2).spacing([16.0, 8.0]).show(ui, |ui| {
                 ui.label("Monitor");
-                let current = self.monitors.get(s.monitor).map_or("Primary".into(), |m| format!("{} ({}×{})", m.name, m.width, m.height));
+                let label = |m: &platform::Monitor| format!("{} ({}×{}){}", m.name, m.width, m.height, if m.primary { " ★" } else { "" });
+                let current = self.monitors.iter().find(|m| m.name == s.display).map_or("Primary".into(), label);
                 egui::ComboBox::from_id_salt("monitor").selected_text(current).show_ui(ui, |ui| {
-                    for (i, m) in self.monitors.iter().enumerate() {
-                        let star = if m.primary { " ★" } else { "" };
-                        ui.selectable_value(&mut s.monitor, i, format!("{} ({}×{}){star}", m.name, m.width, m.height));
+                    ui.selectable_value(&mut s.display, String::new(), "Primary").on_hover_text("Whichever monitor Windows has as primary");
+                    for m in &self.monitors {
+                        ui.selectable_value(&mut s.display, m.name.clone(), label(m));
                     }
                 });
                 ui.end_row();

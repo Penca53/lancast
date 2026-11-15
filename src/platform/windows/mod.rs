@@ -13,6 +13,7 @@ pub use gpu::monitors;
 use crate::{
     clock, codec,
     config::{Codec, RateControl, Settings, fit},
+    platform::Monitor,
     server::Stats,
     stream::{Hub, Kind, Latest, Packet},
 };
@@ -28,7 +29,7 @@ use std::{
     time::{Duration, Instant},
 };
 use windows::Win32::{
-    Graphics::Direct3D11::ID3D11Texture2D,
+    Graphics::{Direct3D11::ID3D11Texture2D, Gdi::HMONITOR},
     Media::MediaFoundation::{MF_VERSION, MFSTARTUP_FULL, MFShutdown, MFStartup},
     System::Com::{COINIT_MULTITHREADED, CoIncrementMTAUsage, CoInitializeEx},
 };
@@ -70,12 +71,17 @@ impl Drop for MfSession {
     }
 }
 
-/// Codecs the GPU driving monitor `index` can encode in hardware (empty if it can't be checked).
-pub fn encoders(index: usize) -> Vec<Codec> {
+/// The monitor named `display`, or the primary one (first) if it's empty or gone.
+fn find_display<'a>(monitors: &'a [(HMONITOR, Monitor)], display: &str) -> Option<&'a (HMONITOR, Monitor)> {
+    monitors.iter().find(|(_, m)| m.name == display).or(monitors.first())
+}
+
+/// Codecs the GPU driving `display` can encode in hardware (empty if it can't be checked).
+pub fn encoders(display: &str) -> Vec<Codec> {
     com_init();
     let Ok(_mf) = MfSession::start() else { return Vec::new() };
     let monitors = gpu::monitor_handles();
-    let Some((handle, _)) = monitors.get(index).or(monitors.first()) else { return Vec::new() };
+    let Some((handle, _)) = find_display(&monitors, display) else { return Vec::new() };
     let Ok(gpu) = gpu::Gpu::for_monitor(*handle) else { return Vec::new() };
     Codec::ALL.into_iter().filter(|&c| encoder::available(&gpu, c)).collect()
 }
@@ -84,7 +90,7 @@ pub fn run_video(s: &Settings, hub: &Hub, stats: &Stats, stop: &AtomicBool) -> R
     com_init();
     let _mf = MfSession::start()?;
     let monitors = gpu::monitor_handles();
-    let (handle, monitor) = monitors.get(s.monitor).or(monitors.first()).context("no monitor found")?;
+    let (handle, monitor) = find_display(&monitors, &s.display).context("no monitor found")?;
     let gpu = gpu::Gpu::for_monitor(*handle)?;
     let cap = capture::Capture::new(&gpu, *handle, s.cursor)?;
     let (w, h) = fit(cap.width, cap.height, s.height);
@@ -172,5 +178,21 @@ fn encode_loop(
             }
             Event::Other => {}
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn display_by_name_else_primary() {
+        let m = |name: &str, primary| Monitor { name: name.into(), width: 1920, height: 1080, primary };
+        // Primary first, as gpu::monitor_handles sorts them.
+        let list = [(HMONITOR(1 as _), m("DISPLAY2", true)), (HMONITOR(2 as _), m("DISPLAY1", false))];
+        assert_eq!(find_display(&list, "DISPLAY1").unwrap().1.name, "DISPLAY1");
+        assert_eq!(find_display(&list, "").unwrap().1.name, "DISPLAY2");
+        assert_eq!(find_display(&list, "DISPLAY9").unwrap().1.name, "DISPLAY2", "unplugged: primary");
+        assert!(find_display(&[], "").is_none());
     }
 }

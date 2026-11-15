@@ -26,7 +26,7 @@ mod unsupported {
     pub fn monitors() -> Vec<super::Monitor> {
         Vec::new()
     }
-    pub fn encoders(_: usize) -> Vec<Codec> {
+    pub fn encoders(_: &str) -> Vec<Codec> {
         Vec::new()
     }
     pub fn run_video(_: &Settings, _: &Hub, _: &Stats, _: &AtomicBool) -> anyhow::Result<()> {

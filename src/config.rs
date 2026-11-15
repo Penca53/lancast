@@ -181,8 +181,9 @@ impl Preset {
 #[serde(default)]
 pub struct Settings {
     pub preset: Option<Preset>,
-    /// Index into the monitor list (primary first).
-    pub monitor: usize,
+    /// Monitor to capture by its Windows device name (e.g. `DISPLAY2`), which survives monitors
+    /// being added, removed or reordered; empty = the primary one.
+    pub display: String,
     /// Output height, scaling up or down with the aspect ratio kept; 0 = native resolution.
     #[serde(alias = "max_height")]
     pub height: u32,
@@ -217,7 +218,7 @@ impl Default for Settings {
     fn default() -> Self {
         let mut s = Settings {
             preset: None,
-            monitor: 0,
+            display: String::new(),
             height: 0,
             fps: 60,
             codec: Codec::H264,
@@ -368,5 +369,7 @@ mod tests {
         let with_bom = Settings::parse(b"\xEF\xBB\xBF{\"fps\":30}").unwrap();
         assert_eq!(with_bom.fps, 30, "UTF-8 BOM (e.g. from Notepad/PowerShell) is accepted");
         assert_eq!(partial.port, 7878);
+        let old_monitor_index: Settings = serde_json::from_str(r#"{"monitor":1,"fps":30}"#).unwrap();
+        assert_eq!((old_monitor_index.fps, old_monitor_index.display.as_str()), (30, ""), "old index ignored: primary");
     }
 }
