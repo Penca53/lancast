@@ -85,17 +85,18 @@ fn is_this_pc(peer: IpAddr, local: IpAddr) -> bool {
     peer.is_loopback() || peer == local
 }
 
-/// Time a client gets to send its request (each connection holds a thread until then).
-const HEAD_TIMEOUT: Duration = Duration::from_secs(if cfg!(test) { 1 } else { 10 });
-/// Players report stats every 2 s; silence this long means the device is gone (e.g. a TV
-/// switched off, which never closes its connections).
-const PLAYER_SILENCE: Duration = Duration::from_secs(10);
+/// Longest a client may stay silent: before sending its request (each connection holds a
+/// thread), or during a session, where players report stats every 2 s, so silence means the
+/// device is gone (e.g. a TV switched off, which never closes its connections). Shorter in
+/// tests, which still leave sessions silent for a few seconds.
+const READ_TIMEOUT: Duration = Duration::from_secs(if cfg!(test) { 5 } else { 10 });
 /// A send that makes no progress this long means the receiver is gone.
 const WRITE_TIMEOUT: Duration = Duration::from_secs(10);
 
 fn handle(stream: TcpStream, tls: Arc<ServerConfig>, hub: &Arc<Hub>, stats: &Arc<Stats>, access: &Access) -> io::Result<()> {
     stream.set_nodelay(true)?;
-    stream.set_read_timeout(Some(HEAD_TIMEOUT))?;
+    // Set before cloning: on Windows a cloned socket keeps the timeouts it was cloned with.
+    stream.set_read_timeout(Some(READ_TIMEOUT))?;
     stream.set_write_timeout(Some(WRITE_TIMEOUT))?;
     let addr = stream.peer_addr()?;
     // Tests connect over loopback but must exercise remote viewers.
@@ -103,35 +104,30 @@ fn handle(stream: TcpStream, tls: Arc<ServerConfig>, hub: &Arc<Hub>, stats: &Arc
     // Both protocols share the port: a TLS connection opens with a handshake record (0x16).
     let mut first = [0u8; 1];
     let is_tls = stream.peek(&mut first)? == 1 && first[0] == 0x16;
-    let conn = Conn { socket: &stream, peer, hub, stats, access };
     let r = if is_tls {
         let (reader, writer) = tls::accept(stream.try_clone()?, tls)?;
-        serve(reader, writer, "https", &conn)
+        serve(reader, writer, peer, "https", hub, stats, access)
     } else {
-        serve(stream.try_clone()?, stream.try_clone()?, "http", &conn)
+        serve(stream.try_clone()?, stream.try_clone()?, peer, "http", hub, stats, access)
     };
     let _ = stream.shutdown(Shutdown::Both);
     r
 }
 
-/// One client connection and the shared state it is served from.
-struct Conn<'a> {
-    socket: &'a TcpStream,
+fn serve<R: Read + Send + 'static, W: Write>(
+    reader: R,
+    mut w: W,
     peer: Peer,
-    hub: &'a Arc<Hub>,
-    stats: &'a Arc<Stats>,
-    access: &'a Access,
-}
-
-fn serve<R: Read + Send + 'static, W: Write>(reader: R, mut w: W, scheme: &str, c: &Conn) -> io::Result<()> {
+    scheme: &str,
+    hub: &Arc<Hub>,
+    stats: &Arc<Stats>,
+    access: &Access,
+) -> io::Result<()> {
     let mut reader = BufReader::new(reader);
     let head = http::read_head(&mut reader)?;
-    log::debug!("{} {scheme} {} {}", c.peer.addr, head.line[0], head.line[1]);
+    log::debug!("{} {scheme} {} {}", peer.addr, head.line[0], head.line[1]);
     match head.path() {
-        "/ws" if ws::is_upgrade(&head) => {
-            c.socket.set_read_timeout(Some(PLAYER_SILENCE))?;
-            session(reader, w, &head, c.peer, c.hub, c.stats, c.access)
-        }
+        "/ws" if ws::is_upgrade(&head) => session(reader, w, &head, peer, hub, stats, access),
         "/" | "/index.html" => http::respond(&mut w, "200 OK", "text/html; charset=utf-8", PLAYER.as_bytes()),
         "/clock" => http::respond(&mut w, "200 OK", "text/html; charset=utf-8", CLOCK.as_bytes()),
         _ => http::respond(&mut w, "404 Not Found", "text/plain", b"not found"),
@@ -417,11 +413,24 @@ mod tests {
     fn drops_connections_that_never_send_a_request() {
         let (port, ..) = start();
         let mut c = TcpStream::connect(("127.0.0.1", port)).unwrap();
-        c.set_read_timeout(Some(HEAD_TIMEOUT * 3)).unwrap();
+        c.set_read_timeout(Some(READ_TIMEOUT * 3)).unwrap();
         let t0 = Instant::now();
         // EOF (or a reset) once the server gives up, well before our own timeout.
         assert!(matches!(c.read(&mut [0u8; 1]), Ok(0) | Err(_)));
-        assert!(t0.elapsed() < HEAD_TIMEOUT * 2, "took {:?}", t0.elapsed());
+        assert!(t0.elapsed() < READ_TIMEOUT * 2, "took {:?}", t0.elapsed());
+    }
+
+    #[test]
+    fn drops_players_that_go_silent() {
+        let (port, hub, _) = start();
+        let _c = ws_connect(port, "/ws");
+        wait_viewers(&hub, 1);
+        let t0 = Instant::now();
+        while hub.viewers() > 0 {
+            assert!(t0.elapsed() < READ_TIMEOUT * 2, "silent player never dropped");
+            thread::sleep(Duration::from_millis(50));
+        }
+        assert!(t0.elapsed() > READ_TIMEOUT / 2, "dropped too early: {:?}", t0.elapsed());
     }
 
     #[test]
