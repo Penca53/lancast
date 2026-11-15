@@ -85,38 +85,53 @@ fn is_this_pc(peer: IpAddr, local: IpAddr) -> bool {
     peer.is_loopback() || peer == local
 }
 
+/// Time a client gets to send its request (each connection holds a thread until then).
+const HEAD_TIMEOUT: Duration = Duration::from_secs(if cfg!(test) { 1 } else { 10 });
+/// Players report stats every 2 s; silence this long means the device is gone (e.g. a TV
+/// switched off, which never closes its connections).
+const PLAYER_SILENCE: Duration = Duration::from_secs(10);
+/// A send that makes no progress this long means the receiver is gone.
+const WRITE_TIMEOUT: Duration = Duration::from_secs(10);
+
 fn handle(stream: TcpStream, tls: Arc<ServerConfig>, hub: &Arc<Hub>, stats: &Arc<Stats>, access: &Access) -> io::Result<()> {
     stream.set_nodelay(true)?;
+    stream.set_read_timeout(Some(HEAD_TIMEOUT))?;
+    stream.set_write_timeout(Some(WRITE_TIMEOUT))?;
     let addr = stream.peer_addr()?;
     // Tests connect over loopback but must exercise remote viewers.
     let peer = Peer { addr, this_pc: !cfg!(test) && is_this_pc(addr.ip(), stream.local_addr()?.ip()) };
     // Both protocols share the port: a TLS connection opens with a handshake record (0x16).
     let mut first = [0u8; 1];
     let is_tls = stream.peek(&mut first)? == 1 && first[0] == 0x16;
+    let conn = Conn { socket: &stream, peer, hub, stats, access };
     let r = if is_tls {
         let (reader, writer) = tls::accept(stream.try_clone()?, tls)?;
-        serve(reader, writer, peer, "https", hub, stats, access)
+        serve(reader, writer, "https", &conn)
     } else {
-        serve(stream.try_clone()?, stream.try_clone()?, peer, "http", hub, stats, access)
+        serve(stream.try_clone()?, stream.try_clone()?, "http", &conn)
     };
     let _ = stream.shutdown(Shutdown::Both);
     r
 }
 
-fn serve<R: Read + Send + 'static, W: Write>(
-    reader: R,
-    mut w: W,
+/// One client connection and the shared state it is served from.
+struct Conn<'a> {
+    socket: &'a TcpStream,
     peer: Peer,
-    scheme: &str,
-    hub: &Arc<Hub>,
-    stats: &Arc<Stats>,
-    access: &Access,
-) -> io::Result<()> {
+    hub: &'a Arc<Hub>,
+    stats: &'a Arc<Stats>,
+    access: &'a Access,
+}
+
+fn serve<R: Read + Send + 'static, W: Write>(reader: R, mut w: W, scheme: &str, c: &Conn) -> io::Result<()> {
     let mut reader = BufReader::new(reader);
     let head = http::read_head(&mut reader)?;
-    log::debug!("{} {scheme} {} {}", peer.addr, head.line[0], head.line[1]);
+    log::debug!("{} {scheme} {} {}", c.peer.addr, head.line[0], head.line[1]);
     match head.path() {
-        "/ws" if ws::is_upgrade(&head) => session(reader, w, &head, peer, hub, stats, access),
+        "/ws" if ws::is_upgrade(&head) => {
+            c.socket.set_read_timeout(Some(PLAYER_SILENCE))?;
+            session(reader, w, &head, c.peer, c.hub, c.stats, c.access)
+        }
         "/" | "/index.html" => http::respond(&mut w, "200 OK", "text/html; charset=utf-8", PLAYER.as_bytes()),
         "/clock" => http::respond(&mut w, "200 OK", "text/html; charset=utf-8", CLOCK.as_bytes()),
         _ => http::respond(&mut w, "404 Not Found", "text/plain", b"not found"),
@@ -396,6 +411,17 @@ mod tests {
         wait_viewers(&hub, 1);
         access.set(policy(Visibility::CastTargets)); // 127.0.0.1 was never cast to
         wait_viewers(&hub, 0);
+    }
+
+    #[test]
+    fn drops_connections_that_never_send_a_request() {
+        let (port, ..) = start();
+        let mut c = TcpStream::connect(("127.0.0.1", port)).unwrap();
+        c.set_read_timeout(Some(HEAD_TIMEOUT * 3)).unwrap();
+        let t0 = Instant::now();
+        // EOF (or a reset) once the server gives up, well before our own timeout.
+        assert!(matches!(c.read(&mut [0u8; 1]), Ok(0) | Err(_)));
+        assert!(t0.elapsed() < HEAD_TIMEOUT * 2, "took {:?}", t0.elapsed());
     }
 
     #[test]
