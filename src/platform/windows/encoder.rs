@@ -19,8 +19,9 @@ pub struct Encoder {
     events: IMFMediaEventGenerator,
     codec_api: ICodecAPI,
     _manager: IMFDXGIDeviceManager,
-    provides_samples: bool,
-    out_size: u32,
+    /// Output sample we lend the encoder for every frame, if it doesn't provide its own
+    /// (NVENC does; others may not).
+    out_sample: Option<IMFSample>,
     duration: i64,
     pub name: String,
 }
@@ -164,18 +165,16 @@ impl Encoder {
 
             let info = mft.GetOutputStreamInfo(0)?;
             let provides = (MFT_OUTPUT_STREAM_PROVIDES_SAMPLES.0 | MFT_OUTPUT_STREAM_CAN_PROVIDE_SAMPLES.0) as u32;
+            let out_sample = if info.dwFlags & provides != 0 {
+                None
+            } else {
+                let s = MFCreateSample()?;
+                s.AddBuffer(&MFCreateMemoryBuffer(info.cbSize.max(w * h * 2))?)?;
+                Some(s)
+            };
             mft.ProcessMessage(MFT_MESSAGE_NOTIFY_BEGIN_STREAMING, 0)?;
             mft.ProcessMessage(MFT_MESSAGE_NOTIFY_START_OF_STREAM, 0)?;
-            Ok(Encoder {
-                events: mft.cast()?,
-                mft,
-                codec_api: api,
-                _manager: manager,
-                provides_samples: info.dwFlags & provides != 0,
-                out_size: info.cbSize.max(w * h * 2),
-                duration: 10_000_000 / fps.max(1) as i64,
-                name,
-            })
+            Ok(Encoder { events: mft.cast()?, mft, codec_api: api, _manager: manager, out_sample, duration: 10_000_000 / fps.max(1) as i64, name })
         }
     }
 
@@ -216,12 +215,14 @@ impl Encoder {
 
     fn output(&mut self) -> Result<Event> {
         unsafe {
-            let sample = if self.provides_samples {
-                None
-            } else {
-                let s = MFCreateSample()?;
-                s.AddBuffer(&MFCreateMemoryBuffer(self.out_size)?)?;
-                Some(s)
+            let sample = match &self.out_sample {
+                Some(s) => {
+                    // Clear what the encoder set for the previous frame (e.g. the keyframe flag).
+                    s.DeleteAllItems()?;
+                    s.GetBufferByIndex(0)?.SetCurrentLength(0)?;
+                    Some(s.clone())
+                }
+                None => None,
             };
             let mut buf =
                 [MFT_OUTPUT_DATA_BUFFER { dwStreamID: 0, pSample: ManuallyDrop::new(sample), dwStatus: 0, pEvents: ManuallyDrop::new(None) }];
