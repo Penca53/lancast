@@ -102,8 +102,8 @@ impl Pacer {
         let _ = self.tx.send((data, to));
     }
 
-    fn set_stream_kbps(&self, kbps: u32) {
-        self.rate.store(pacing_kbps(kbps) as u64 * 125, Ordering::Relaxed);
+    fn set_kbps(&self, kbps: u32) {
+        self.rate.store(kbps as u64 * 125, Ordering::Relaxed);
     }
 }
 
@@ -180,8 +180,8 @@ fn drive(pacer: &Pacer, local: SocketAddr, rx: Receiver<Msg>, answers: &Sender<S
             }
             Ok(Msg::Media(p)) if p.kind == Kind::VideoConfig => {
                 let cfg: serde_json::Value = serde_json::from_slice(&p.data).unwrap_or_default();
-                if let Some(kbps) = cfg["kbps"].as_u64() {
-                    pacer.set_stream_kbps(kbps as u32);
+                if let Some(kbps) = cfg["pacing_kbps"].as_u64() {
+                    pacer.set_kbps(kbps as u32);
                 }
                 codec = cfg["codec"].as_str().and_then(config::Codec::from_codec_string);
                 if let (Some(rtc), Some(m), Some(c)) = (&mut rtc, mid, codec) {

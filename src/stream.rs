@@ -9,7 +9,7 @@ use std::sync::{
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 #[repr(u8)]
 pub enum Kind {
-    /// JSON `{codec,width,height}`; cached and replayed to new viewers.
+    /// JSON `{codec,width,height,fps,kbps,pacing_kbps}`; cached and replayed to new viewers.
     VideoConfig = 1,
     /// One encoded access unit (Annex-B), or an fMP4 fragment in MSE sessions.
     Video = 2,

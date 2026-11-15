@@ -12,7 +12,7 @@ pub use gpu::monitors;
 
 use crate::{
     clock, codec,
-    config::{Codec, Settings, fit},
+    config::{Codec, RateControl, Settings, fit},
     server::Stats,
     stream::{Hub, Kind, Latest, Packet},
 };
@@ -96,7 +96,7 @@ pub fn run_video(s: &Settings, hub: &Hub, stats: &Stats, stop: &AtomicBool) -> R
     let slot = Latest::<Frame>::default();
     thread::scope(|scope| {
         let encoding = scope.spawn(|| {
-            let r = encode_loop(enc, &slot, hub, stats, s.codec, (w, h, s.fps, s.rate.kbps()));
+            let r = encode_loop(enc, &slot, hub, stats, s.codec, (w, h, s.fps, s.rate));
             slot.close();
             r
         });
@@ -139,7 +139,7 @@ fn encode_loop(
     hub: &Hub,
     stats: &Stats,
     codec: Codec,
-    (w, h, fps, kbps): (u32, u32, u32, u32),
+    (w, h, fps, rate): (u32, u32, u32, RateControl),
 ) -> Result<()> {
     com_init();
     let mut config: Option<String> = None;
@@ -154,7 +154,8 @@ fn encode_loop(
             Event::Output { data, pts_us, key } => {
                 let key = key || codec::is_keyframe(codec, &data);
                 if key && let Some(cs) = codec::codec_string(codec, &data).filter(|cs| config.as_ref() != Some(cs)) {
-                    let json = serde_json::json!({ "codec": cs, "width": w, "height": h, "fps": fps, "kbps": kbps }).to_string();
+                    let json = serde_json::json!({ "codec": cs, "width": w, "height": h, "fps": fps, "kbps": rate.kbps(), "pacing_kbps": rate.pacing_kbps() })
+                        .to_string();
                     hub.publish(Packet::new(Kind::VideoConfig, false, pts_us, json.into_bytes()));
                     config = Some(cs);
                 }

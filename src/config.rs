@@ -65,13 +65,26 @@ impl RateControl {
             RateControl::Quality { .. } => 100_000,
         }
     }
+
+    /// Rate at which WebRTC packets are released for this stream (see [`pacing_kbps`]).
+    pub fn pacing_kbps(self) -> u32 {
+        match self {
+            RateControl::Cbr { kbps } => pacing_kbps(kbps),
+            // No known bitrate (100 Mbps is only a guess at the peak): stay under 100 Mbit TV
+            // ports instead of pacing above them for a rate the stream may never reach.
+            RateControl::Quality { .. } => PORT_SAFE_KBPS,
+        }
+    }
 }
+
+/// Fastest pacing that doesn't overflow 100 Mbit TV ports (common on LG/Samsung).
+const PORT_SAFE_KBPS: u32 = 95_000;
 
 /// Rate at which UDP (WebRTC) packets are released for a stream of `kbps`: well above the
 /// stream rate so frames go out quickly, but under 95 Mbps unless the stream itself needs
-/// more, so bursts don't overflow 100 Mbit TV ports (common on LG/Samsung) and switch buffers.
+/// more, so bursts don't overflow 100 Mbit TV ports and switch buffers.
 pub fn pacing_kbps(kbps: u32) -> u32 {
-    (kbps * 6 / 5).max((kbps * 4).min(95_000))
+    (kbps * 6 / 5).max((kbps * 4).min(PORT_SAFE_KBPS))
 }
 
 /// How the TV-side page decodes video.
@@ -323,6 +336,8 @@ mod tests {
             let p = pacing_kbps(kbps);
             assert!(p >= kbps * 6 / 5 && p <= 95_000, "{kbps} -> {p}");
         }
+        assert_eq!(RateControl::Cbr { kbps: 25_000 }.pacing_kbps(), pacing_kbps(25_000));
+        assert!(RateControl::Quality { level: 85 }.pacing_kbps() <= 95_000, "unknown bitrate: stay under 100 Mbit");
     }
 
     #[test]
