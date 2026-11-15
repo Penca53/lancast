@@ -30,10 +30,26 @@ pub struct Engine {
     /// Who may watch, as the server checks it; follows `settings`.
     access: Arc<Access>,
     generation: AtomicU64,
-    /// App each TV showed before we opened the player, to restore on stop.
-    previous_app: Mutex<HashMap<String, String>>,
-    /// What the last cast opened on the TV (browser or LanCast app).
-    cast_app: Mutex<&'static str>,
+    /// What casting changed on each TV (by IP), to undo on stop.
+    casts: Mutex<HashMap<String, Cast>>,
+}
+
+/// What a cast changed on one TV.
+#[derive(Clone, Debug, PartialEq)]
+struct Cast {
+    /// App the TV showed before LanCast took over, to return to.
+    previous: Option<String>,
+    /// What the cast opened: the browser or the LanCast app.
+    app: &'static str,
+}
+
+/// The app to return to on stop: the one on screen before casting. If the player is what's
+/// on screen (casting again) or the TV won't say, keep the app remembered from before.
+fn app_to_restore(foreground: Option<String>, remembered: Option<String>) -> Option<String> {
+    match foreground {
+        Some(app) if app != webos::BROWSER && app != tvapp::APP_ID => Some(app),
+        _ => remembered,
+    }
 }
 
 impl Engine {
@@ -46,16 +62,8 @@ impl Engine {
         names.extend(local_ip("1.1.1.1").map(|ip| ip.to_string()));
         let tls = crate::tls::server_config(crate::config::dir().as_deref(), crate::config::PERSIST, &names).map_err(std::io::Error::other)?;
         let port = server::spawn(settings.port, tls, hub.clone(), stats.clone(), access.clone())?;
-        let engine = Arc::new(Engine {
-            hub,
-            stats,
-            port,
-            settings: Mutex::new(settings),
-            access,
-            generation: AtomicU64::new(0),
-            previous_app: Mutex::default(),
-            cast_app: Mutex::new(webos::BROWSER),
-        });
+        let engine =
+            Arc::new(Engine { hub, stats, port, settings: Mutex::new(settings), access, generation: AtomicU64::new(0), casts: Mutex::default() });
         let e = engine.clone();
         thread::Builder::new().name("supervisor".into()).spawn(move || supervise(&e))?;
         Ok(engine)
@@ -123,30 +131,33 @@ impl Engine {
         self.update(|s| {
             s.cast_targets.insert(ip.to_owned());
         });
-        if let Some(app) = tv.foreground_app() {
-            self.previous_app.lock().unwrap().insert(ip.to_owned(), app);
-        }
+        let remembered = self.casts.lock().unwrap().get(ip).and_then(|c| c.previous.clone());
+        let previous = app_to_restore(tv.foreground_app(), remembered);
+        let app = self.open_player(&mut tv, ip)?;
+        self.casts.lock().unwrap().insert(ip.to_owned(), Cast { previous, app });
+        Ok(())
+    }
+
+    /// Opens the player on the TV; returns what it opened it in.
+    fn open_player(&self, tv: &mut webos::Session, ip: &str) -> anyhow::Result<&'static str> {
         if self.settings().tv_app {
             let params = serde_json::json!({ "server": self.server_for(Some(ip)), "params": self.player_query() });
             match tv.launch_with(tvapp::APP_ID, params) {
-                Ok(()) => {
-                    *self.cast_app.lock().unwrap() = tvapp::APP_ID;
-                    return Ok(());
-                }
+                Ok(()) => return Ok(tvapp::APP_ID),
                 Err(e) => log::info!("LanCast TV app not available ({e:#}); using the browser"),
             }
         }
-        *self.cast_app.lock().unwrap() = webos::BROWSER;
         // Same URL every time: the TV re-focuses an existing player tab (which reloads itself
         // when shown) instead of piling up tabs that each hold decoder resources.
-        tv.open_url(&self.url_for(Some(ip)))
+        tv.open_url(&self.url_for(Some(ip)))?;
+        Ok(webos::BROWSER)
     }
 
     /// Ends the cast, returning the TV to whatever it showed before.
     pub fn stop_webos(&self, ip: &str) -> anyhow::Result<()> {
-        let previous = self.previous_app.lock().unwrap().remove(ip);
-        let cast_app = *self.cast_app.lock().unwrap();
-        self.webos(ip, || {})?.leave(cast_app, previous.as_deref())
+        let cast = self.casts.lock().unwrap().remove(ip);
+        let (app, previous) = cast.map_or((webos::BROWSER, None), |c| (c.app, c.previous));
+        self.webos(ip, || {})?.leave(app, previous.as_deref())
     }
 
     /// `ip:port` of this server as reachable from `peer` (picks the right local interface).
@@ -267,6 +278,19 @@ mod tests {
         let s = e.settings();
         assert_eq!(s.fps, 30);
         assert_eq!(s.webos_keys.get("10.0.0.2").map(String::as_str), Some("key"));
+    }
+
+    #[test]
+    fn stop_returns_to_the_app_from_before_the_first_cast() {
+        let app = |s: &str| Some(s.to_owned());
+        assert_eq!(app_to_restore(app("netflix"), None), app("netflix"));
+        // Casting again while the player is on screen must not forget the original app.
+        assert_eq!(app_to_restore(app(webos::BROWSER), app("netflix")), app("netflix"));
+        assert_eq!(app_to_restore(app(tvapp::APP_ID), app("netflix")), app("netflix"));
+        assert_eq!(app_to_restore(None, app("netflix")), app("netflix"), "TV wouldn't say");
+        // The user switched apps on the TV since: that's the one to return to now.
+        assert_eq!(app_to_restore(app("youtube"), app("netflix")), app("youtube"));
+        assert_eq!(app_to_restore(app(webos::BROWSER), None), None);
     }
 
     #[test]
