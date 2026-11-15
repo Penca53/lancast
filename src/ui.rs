@@ -266,6 +266,7 @@ impl App {
         ui.add_space(6.0);
         ui.horizontal(|ui| {
             ui.label(RichText::new("LanCast").size(26.0).strong());
+            ui.label(RichText::new(concat!("v", env!("CARGO_PKG_VERSION"))).weak().small());
             ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
                 let viewers = self.engine.hub.viewers();
                 let (dot, text) = match viewers {
