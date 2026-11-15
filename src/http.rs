@@ -80,12 +80,14 @@ pub fn split_url(url: &str) -> Option<(String, String)> {
     Some((host, path.to_owned()))
 }
 
-/// Resolves a possibly relative URL against `base` (absolute http URL).
+/// Resolves a possibly relative URL against `base` (absolute http URL). `base` comes from
+/// devices on the network, so anything else must not panic: it is returned unresolved.
 pub fn join_url(base: &str, url: &str) -> String {
     if url.starts_with("http://") {
         return url.to_owned();
     }
-    let origin_end = base[7..].find('/').map_or(base.len(), |i| i + 7);
+    let Some(rest) = base.strip_prefix("http://") else { return url.to_owned() };
+    let origin_end = rest.find('/').map_or(base.len(), |i| i + "http://".len());
     let origin = &base[..origin_end];
     if url.starts_with('/') {
         format!("{origin}{url}")
@@ -176,6 +178,14 @@ mod tests {
         assert_eq!(join_url("http://a:1/x/desc.xml", "/ctl"), "http://a:1/ctl");
         assert_eq!(join_url("http://a:1", "ctl"), "http://a:1/ctl");
         assert_eq!(join_url("http://a:1/x", "http://b/y"), "http://b/y");
+    }
+
+    #[test]
+    fn join_url_survives_bad_bases() {
+        // A device description's <URLBase> is untrusted: short, non-http or non-ASCII text.
+        for base in ["", "abc", "https://tv/", "ftp://é/x", "ééééé"] {
+            assert_eq!(join_url(base, "ctl"), "ctl", "{base:?}");
+        }
     }
 
     #[test]
