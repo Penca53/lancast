@@ -126,7 +126,7 @@ fn headless(settings: config::Settings, cast: Option<String>, seconds: Option<u6
             s.peak_frame.swap(0, Ordering::Relaxed) / 1000,
             s.encode_us.load(Ordering::Relaxed) as f64 / 1e3,
             s.latency_us() as f64 / 1e3,
-            s.status.lock().unwrap()
+            s.error().map_or_else(|| s.status.lock().unwrap().clone(), |e| format!("error: {e}"))
         );
         (frames, bytes) = (f, b);
         if seconds.is_some_and(|n| elapsed >= n) {

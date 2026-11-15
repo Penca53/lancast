@@ -374,6 +374,8 @@ function connect() {
     if (m.t === 'answer') rtc.answer(m.sdp);
     if (m.t === 'clock') pcClockOffset = m.ms - Date.now();
     if (m.t === 'denied') denied();
+    // Stays up until the next frame is shown (see ack).
+    if (m.t === 'error') status(`LanCast on your PC can't stream:\n${m.msg}`);
   };
   ws.onclose = () => { player.reset(); status('Reconnecting…'); reloadWhenServerIsBack(); };
 }

@@ -221,7 +221,7 @@ where
             while !stop.load(Ordering::Relaxed) {
                 if let Err(err) = f(&hub, &stats, &stop) {
                     log::error!("{name2} pipeline: {err:#}");
-                    stats.set_status(format!("{name2} error: {err:#}"));
+                    stats.set_error(format!("{name2}: {err:#}"));
                     thread::sleep(Duration::from_secs(1));
                 }
             }

@@ -214,6 +214,7 @@ impl eframe::App for App {
         egui::CentralPanel::default().show(ui, |ui| {
             egui::ScrollArea::vertical().show(ui, |ui| {
                 self.header(ui);
+                self.error_ui(ui);
                 self.devices_ui(ui);
                 self.link_ui(ui);
                 self.quality_ui(ui);
@@ -248,6 +249,16 @@ impl App {
             });
         });
         ui.label(RichText::new("Cast your screen to any TV on your network — no app needed on the TV.").weak());
+    }
+
+    /// The pipeline keeps failing (e.g. no encoder for the chosen codec): say so up front.
+    fn error_ui(&self, ui: &mut egui::Ui) {
+        let Some(error) = self.engine.stats.error() else { return };
+        ui.add_space(10.0);
+        card(ui, |ui| {
+            ui.label(RichText::new("Can't stream").strong().color(WARN));
+            ui.label(RichText::new(error).small());
+        });
     }
 
     fn devices_ui(&mut self, ui: &mut egui::Ui) {

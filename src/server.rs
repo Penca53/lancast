@@ -35,12 +35,17 @@ pub struct Stats {
     pub peak_frame: AtomicU64,
     /// Time from encoder input to encoded output for the latest frame.
     pub encode_us: AtomicU64,
-    /// Pipeline description or last error.
+    /// Pipeline description.
     pub status: Mutex<String>,
+    /// Latest pipeline error and when it happened (see [`Stats::error`]).
+    error: Mutex<Option<(Instant, String)>>,
     /// Connected players by session id.
     viewers: Mutex<BTreeMap<u64, Viewer>>,
     next_viewer: AtomicU64,
 }
+
+/// How long a pipeline error stays current without being reported again.
+const ERROR_SHOWN_FOR: Duration = Duration::from_secs(3);
 
 /// One connected player, as it reports itself.
 #[derive(Clone, Debug, PartialEq)]
@@ -55,6 +60,16 @@ pub struct Viewer {
 impl Stats {
     pub fn set_status(&self, s: impl Into<String>) {
         *self.status.lock().unwrap() = s.into();
+    }
+
+    pub fn set_error(&self, e: impl Into<String>) {
+        *self.error.lock().unwrap() = Some((Instant::now(), e.into()));
+    }
+
+    /// The pipeline's error while it keeps failing. Failed pipelines retry every second and
+    /// report again, so an error older than [`ERROR_SHOWN_FOR`] means it has recovered.
+    pub fn error(&self) -> Option<String> {
+        self.error.lock().unwrap().as_ref().filter(|(at, _)| at.elapsed() < ERROR_SHOWN_FOR).map(|(_, e)| e.clone())
     }
 
     /// Current players, in the order they connected.
@@ -225,6 +240,7 @@ fn session<R: Read + Send + 'static, W: Write>(
     let mut remux = (mode == "mse").then(fmp4::Remuxer::default);
     let mut w = BufWriter::with_capacity(256 * 1024, w);
     let mut last_clock = Instant::now() - CLOCK_INTERVAL;
+    let mut sent_error = None;
     let result = loop {
         // The player closed the socket (or sent a Close frame, e.g. its tab was hidden):
         // answer it to complete the closing handshake and stop streaming right away.
@@ -245,6 +261,17 @@ fn session<R: Read + Send + 'static, W: Write>(
             last_clock = Instant::now();
             if let Err(e) = send_text(&mut w, &serde_json::json!({ "t": "clock", "ms": wall_clock_ms() })) {
                 break Err(e);
+            }
+            // The pipeline can't run (e.g. no encoder for the codec): the player says why
+            // instead of waiting for a picture forever.
+            let error = stats.error();
+            if error != sent_error {
+                if let Some(msg) = &error
+                    && let Err(e) = send_text(&mut w, &serde_json::json!({ "t": "error", "msg": msg }))
+                {
+                    break Err(e);
+                }
+                sent_error = error;
             }
         }
         if let Some(answers) = &answers
@@ -484,6 +511,24 @@ mod tests {
             thread::sleep(Duration::from_millis(50));
         }
         assert!(t0.elapsed() > READ_TIMEOUT / 2, "dropped too early: {:?}", t0.elapsed());
+    }
+
+    #[test]
+    fn pipeline_errors_reach_the_player_and_expire() {
+        let (port, _, stats) = start();
+        let mut c = ws_connect(port, "/ws");
+        stats.set_error("video pipeline: no hardware encoder");
+        let msg = loop {
+            let (_, m) = ws::read_message(&mut c).unwrap();
+            let v: serde_json::Value = serde_json::from_slice(&m).unwrap_or_default();
+            if v["t"] == "error" {
+                break v["msg"].as_str().unwrap().to_owned();
+            }
+        };
+        assert_eq!(msg, "video pipeline: no hardware encoder");
+        assert!(stats.error().is_some());
+        *stats.error.lock().unwrap() = Some((Instant::now() - ERROR_SHOWN_FOR, msg));
+        assert_eq!(stats.error(), None, "not reported again: recovered");
     }
 
     #[test]
