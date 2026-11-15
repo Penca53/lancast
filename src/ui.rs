@@ -515,7 +515,7 @@ and an AV1-capable TV (e.g. LG 2022+).",
                     (format!("{:.0}", self.rates.fps), "fps"),
                     (format!("{:.1}", self.rates.mbps), "Mbps"),
                     (format!("{:.1}", ms(&st.encode_us)), "ms encode"),
-                    (format!("{:.0}", ms(&st.latency_us)), "ms to screen"),
+                    (format!("{:.0}", st.latency_us() as f64 / 1e3), "ms to screen"),
                 ] {
                     ui.vertical(|ui| {
                         ui.label(RichText::new(value).size(20.0).strong());
@@ -525,8 +525,10 @@ and an AV1-capable TV (e.g. LG 2022+).",
                 ui.end_row();
             });
             ui.add_space(4.0);
-            let player = st.player.lock().unwrap().clone();
-            ui.label(RichText::new(format!("{}  ·  player: {player}", st.status.lock().unwrap())).weak().small());
+            let mut players: Vec<_> = st.viewers().into_iter().map(|v| v.player).collect();
+            players.sort();
+            players.dedup();
+            ui.label(RichText::new(format!("{}  ·  player: {}", st.status.lock().unwrap(), players.join(", "))).weak().small());
         });
     }
 }

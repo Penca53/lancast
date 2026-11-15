@@ -93,7 +93,7 @@ fn run_pipeline(codec: Codec) {
         st.status.lock().unwrap()
     );
     assert!(lat[lat.len() / 2] < 50_000, "median latency too high");
-    assert!(st.latency_us.load(Ordering::Relaxed) > 0, "acks not recorded");
+    assert!(st.latency_us() > 0, "acks not recorded");
 }
 
 #[test]
@@ -185,16 +185,16 @@ fn tv_cast_webos() {
     let engine = start(Settings::load());
     engine.cast_webos(&ip, || println!("accept the prompt on the TV…")).unwrap();
     let t0 = Instant::now();
-    while engine.stats.latency_us.load(Ordering::Relaxed) == 0 {
+    while engine.stats.latency_us() == 0 {
         assert!(t0.elapsed() < Duration::from_secs(30), "TV never displayed a frame");
         std::thread::sleep(Duration::from_millis(100));
     }
-    println!("first frame on TV after {:?} via {}", t0.elapsed(), engine.stats.player.lock().unwrap());
+    println!("first frame on TV after {:?}: {:?}", t0.elapsed(), engine.stats.viewers());
     for _ in 0..10 {
         std::thread::sleep(Duration::from_secs(1));
         println!(
             "TV latency (capture -> decoded/presented on TV, smoothed): {:.1} ms, frames {}",
-            engine.stats.latency_us.load(Ordering::Relaxed) as f64 / 1e3,
+            engine.stats.latency_us() as f64 / 1e3,
             engine.stats.frames.load(Ordering::Relaxed)
         );
     }

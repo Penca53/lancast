@@ -10,6 +10,7 @@ use crate::{
 };
 use rustls::ServerConfig;
 use std::{
+    collections::BTreeMap,
     io::{self, BufReader, BufWriter, Read, Write},
     net::{IpAddr, Shutdown, SocketAddr, TcpListener, TcpStream},
     sync::{
@@ -32,25 +33,59 @@ pub struct Stats {
     pub video_bytes: AtomicU64,
     /// Largest encoded frame since the last reset (bytes); shows bitrate bursts.
     pub peak_frame: AtomicU64,
-    /// Smoothed capture-to-displayed-on-TV latency, as acknowledged by the player.
-    pub latency_us: AtomicU64,
     /// Time from encoder input to encoded output for the latest frame.
     pub encode_us: AtomicU64,
     /// Pipeline description or last error.
     pub status: Mutex<String>,
-    /// What the most recent player reported (decode path).
-    pub player: Mutex<String>,
+    /// Connected players by session id.
+    viewers: Mutex<BTreeMap<u64, Viewer>>,
+    next_viewer: AtomicU64,
+}
+
+/// One connected player, as it reports itself.
+#[derive(Clone, Debug, PartialEq)]
+pub struct Viewer {
+    pub ip: IpAddr,
+    /// Decode path (`mse`, `webrtc`, ...), as requested until the player says hello.
+    pub player: String,
+    /// Smoothed capture-to-displayed latency; 0 until the player acknowledges a frame.
+    pub latency_us: u64,
 }
 
 impl Stats {
-    fn record_latency(&self, us: u64) {
-        let old = self.latency_us.load(Ordering::Relaxed);
-        let new = if old == 0 { us } else { (old * 7 + us) / 8 };
-        self.latency_us.store(new, Ordering::Relaxed);
-    }
-
     pub fn set_status(&self, s: impl Into<String>) {
         *self.status.lock().unwrap() = s.into();
+    }
+
+    /// Current players, in the order they connected.
+    pub fn viewers(&self) -> Vec<Viewer> {
+        self.viewers.lock().unwrap().values().cloned().collect()
+    }
+
+    /// Highest latency among current players (the slowest screen is the one to watch);
+    /// 0 when none has reported yet.
+    pub fn latency_us(&self) -> u64 {
+        self.viewers.lock().unwrap().values().map(|v| v.latency_us).max().unwrap_or(0)
+    }
+
+    fn add_viewer(&self, ip: IpAddr, player: &str) -> u64 {
+        let id = self.next_viewer.fetch_add(1, Ordering::Relaxed);
+        self.viewers.lock().unwrap().insert(id, Viewer { ip, player: player.to_owned(), latency_us: 0 });
+        id
+    }
+
+    fn remove_viewer(&self, id: u64) {
+        self.viewers.lock().unwrap().remove(&id);
+    }
+
+    fn update_viewer(&self, id: u64, f: impl FnOnce(&mut Viewer)) {
+        if let Some(v) = self.viewers.lock().unwrap().get_mut(&id) {
+            f(v);
+        }
+    }
+
+    fn record_latency(&self, id: u64, us: u64) {
+        self.update_viewer(id, |v| v.latency_us = if v.latency_us == 0 { us } else { (v.latency_us * 7 + us) / 8 });
     }
 }
 
@@ -155,6 +190,8 @@ fn session<R: Read + Send + 'static, W: Write>(
     let peer = peer.addr;
     log::info!("viewer connected: {peer}");
     let mode = head.param("mode").unwrap_or_default();
+    let viewer = ViewerEntry::add(stats, peer.ip(), mode);
+    let id = viewer.1;
     let sub = hub.subscribe();
     // WebRTC: video travels over RTP from a peer thread; the WebSocket carries signalling + audio.
     let (rtc, answers) = match mode {
@@ -179,7 +216,7 @@ fn session<R: Read + Send + 'static, W: Write>(
         let (hub, stats, closed, rtc, read_pts) = (hub.clone(), stats.clone(), closed.clone(), rtc.clone(), read_pts.clone());
         thread::spawn(move || {
             while let Ok(Some(text)) = ws::read_text(&mut reader) {
-                on_message(&text, &hub, &stats, rtc.as_ref(), &read_pts);
+                on_message(&text, &hub, &stats, id, rtc.as_ref(), &read_pts);
             }
             closed.store(true, Ordering::Relaxed);
         });
@@ -243,8 +280,24 @@ fn session<R: Read + Send + 'static, W: Write>(
     if let Some(tx) = &rtc {
         let _ = tx.send(webrtc::Msg::Close);
     }
+    drop(viewer);
     log::info!("viewer disconnected: {peer}");
     result
+}
+
+/// A session's entry in [`Stats`] viewers, removed when the session ends however it ends.
+struct ViewerEntry<'a>(&'a Stats, u64);
+
+impl<'a> ViewerEntry<'a> {
+    fn add(stats: &'a Stats, ip: IpAddr, player: &str) -> Self {
+        ViewerEntry(stats, stats.add_viewer(ip, player))
+    }
+}
+
+impl Drop for ViewerEntry<'_> {
+    fn drop(&mut self) {
+        self.0.remove_viewer(self.1);
+    }
 }
 
 const CLOCK_INTERVAL: Duration = Duration::from_millis(250);
@@ -310,7 +363,7 @@ fn send_text(w: &mut impl Write, v: &serde_json::Value) -> io::Result<()> {
     ws::write_frame(w, ws::TEXT, &[v.to_string().as_bytes()], None)
 }
 
-fn on_message(text: &str, hub: &Hub, stats: &Stats, rtc: Option<&mpsc::Sender<webrtc::Msg>>, read_pts: &AtomicU64) {
+fn on_message(text: &str, hub: &Hub, stats: &Stats, viewer: u64, rtc: Option<&mpsc::Sender<webrtc::Msg>>, read_pts: &AtomicU64) {
     let Ok(v) = serde_json::from_str::<serde_json::Value>(text) else { return };
     match v["t"].as_str() {
         Some("rx") => {
@@ -320,7 +373,7 @@ fn on_message(text: &str, hub: &Hub, stats: &Stats, rtc: Option<&mpsc::Sender<we
         }
         Some("ack") => {
             if let Some(pts) = v["pts"].as_u64() {
-                stats.record_latency(clock::now_us().saturating_sub(pts));
+                stats.record_latency(viewer, clock::now_us().saturating_sub(pts));
             }
         }
         Some("key") => hub.request_key(),
@@ -332,7 +385,7 @@ fn on_message(text: &str, hub: &Hub, stats: &Stats, rtc: Option<&mpsc::Sender<we
         // WebRTC players report their receive-to-decoded delay; add our capture+encode time.
         Some("delay") => {
             if let Some(ms) = v["ms"].as_f64() {
-                stats.record_latency((ms * 1000.0) as u64 + stats.encode_us.load(Ordering::Relaxed));
+                stats.record_latency(viewer, (ms * 1000.0) as u64 + stats.encode_us.load(Ordering::Relaxed));
             }
         }
         Some("hello") => {
@@ -346,7 +399,7 @@ fn on_message(text: &str, hub: &Hub, stats: &Stats, rtc: Option<&mpsc::Sender<we
                 v["mse"],
                 v["ua"].as_str().unwrap_or("")
             );
-            *stats.player.lock().unwrap() = mode.to_owned();
+            stats.update_viewer(viewer, |v| v.player = mode.to_owned());
         }
         Some("log") => log::warn!("player: {}", v["msg"].as_str().unwrap_or("")),
         Some("stat" | "rtcstat") => log::debug!("player {v}"),
@@ -460,7 +513,7 @@ mod tests {
         assert_eq!(msg.len(), 10 + 300_000);
         let pts = clock::now_us();
         ws::write_frame(&mut c, ws::TEXT, &[format!(r#"{{"t":"ack","pts":{pts}}}"#).as_bytes()], Some([1, 2, 3, 4])).unwrap();
-        eventually("ack over TLS", || stats.latency_us.load(Ordering::Relaxed) > 0);
+        eventually("ack over TLS", || stats.latency_us() > 0);
     }
 
     #[test]
@@ -549,13 +602,31 @@ mod tests {
         let pts = clock::now_us();
         ws::write_frame(&mut c, ws::TEXT, &[format!(r#"{{"t":"ack","pts":{pts}}}"#).as_bytes()], Some([1, 2, 3, 4])).unwrap();
         ws::write_frame(&mut c, ws::TEXT, &[br#"{"t":"key"}"#], Some([1, 2, 3, 4])).unwrap();
-        eventually("latency ack", || stats.latency_us.load(Ordering::Relaxed) > 0);
+        eventually("latency ack", || stats.latency_us() > 0);
         eventually("keyframe request", || hub.take_key_request());
 
         drop(c);
         // A disconnect is noticed via the reader thread (or the next failed write).
         hub.publish(Packet::new(Kind::Audio, false, 0, vec![0; 4]));
         wait_viewers(&hub, 0);
+        eventually("viewer entry removed", || stats.viewers().is_empty());
+        assert_eq!(stats.latency_us(), 0, "a gone viewer's latency must not linger");
+    }
+
+    #[test]
+    fn latency_is_tracked_per_viewer() {
+        let stats = Stats::default();
+        let (tv, phone) = (stats.add_viewer([10, 0, 0, 2].into(), "mse"), stats.add_viewer([10, 0, 0, 3].into(), "webcodecs"));
+        stats.record_latency(tv, 130_000);
+        stats.record_latency(phone, 5_000);
+        assert_eq!(stats.latency_us(), 130_000, "the slowest screen, not a blend");
+        stats.record_latency(phone, 13_000);
+        assert_eq!(stats.viewers()[1].latency_us, (5_000 * 7 + 13_000) / 8);
+        stats.remove_viewer(tv);
+        assert_eq!(stats.latency_us(), 6_000);
+        let again = stats.add_viewer([10, 0, 0, 2].into(), "mse");
+        assert_eq!(stats.viewers().iter().find(|v| v.ip == IpAddr::from([10, 0, 0, 2])).unwrap().latency_us, 0, "a new session starts fresh");
+        stats.remove_viewer(again);
     }
 
     #[test]

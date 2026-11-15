@@ -125,7 +125,7 @@ fn headless(settings: config::Settings, cast: Option<String>, seconds: Option<u6
             (b - bytes) as f64 * 8.0 / 1e6,
             s.peak_frame.swap(0, Ordering::Relaxed) / 1000,
             s.encode_us.load(Ordering::Relaxed) as f64 / 1e3,
-            s.latency_us.load(Ordering::Relaxed) as f64 / 1e3,
+            s.latency_us() as f64 / 1e3,
             s.status.lock().unwrap()
         );
         (frames, bytes) = (f, b);
