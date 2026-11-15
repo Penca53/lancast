@@ -505,7 +505,7 @@ and an AV1-capable TV (e.g. LG 2022+).",
                 ui.horizontal(|ui| {
                     let mut cbr = matches!(s.rate, RateControl::Cbr { .. });
                     if ui.selectable_value(&mut cbr, true, "Constant").changed() || ui.selectable_value(&mut cbr, false, "Quality").changed() {
-                        s.rate = if cbr { RateControl::Cbr { kbps: 40_000 } } else { RateControl::Quality { level: 85 } };
+                        s.rate = if cbr { Settings::default().rate } else { RateControl::Quality { level: 85 } };
                     }
                 });
                 ui.end_row();
@@ -528,7 +528,7 @@ and an AV1-capable TV (e.g. LG 2022+).",
                     ui.selectable_value(&mut s.player, Player::Auto, "Auto");
                     ui.selectable_value(&mut s.player, Player::WebCodecs, "WebCodecs").on_hover_text("Lowest latency; needs HTTPS on TVs");
                     ui.selectable_value(&mut s.player, Player::WebRtc, "WebRTC").on_hover_text("Low latency on plain HTTP");
-                    ui.selectable_value(&mut s.player, Player::Mse, "MSE").on_hover_text("Most compatible; TVs buffer ~0.5-1 s");
+                    ui.selectable_value(&mut s.player, Player::Mse, "MSE").on_hover_text("Most compatible; TVs play it ~0.1-0.3 s behind");
                 });
                 ui.end_row();
 
@@ -539,7 +539,7 @@ and an AV1-capable TV (e.g. LG 2022+).",
                     ui.checkbox(&mut s.tv_app, "Use TV app")
                         .on_hover_text("Cast to the LanCast webOS app when it's installed on the TV, instead of the TV's browser");
                     ui.checkbox(&mut s.tv_stats, "Stats on TV")
-                        .on_hover_text("Shows stats and the live PC clock on the TV.\nOpen the latency check (link below) on the PC and compare the two clocks.");
+                        .on_hover_text("Shows stats and the live PC clock on the TV.\nOpen Latency check (under Link) on the PC and compare the two clocks.");
                     ui.checkbox(&mut s.https, "HTTPS")
                         .on_hover_text("Enables the low-latency WebCodecs player in browsers that accept a self-signed certificate\n(choose Advanced → Proceed on the warning). Doesn't work on LG webOS 25 TVs.");
                 });
