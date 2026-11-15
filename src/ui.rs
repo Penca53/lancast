@@ -46,6 +46,14 @@ enum Msg {
     Encoders(usize, Vec<Codec>),
 }
 
+/// What a click on a TV's card asks for (by IP).
+enum Action {
+    Cast(String),
+    Stop(String),
+    /// Forget a TV added by IP.
+    Remove(String),
+}
+
 /// Smoothed throughput derived from the engine's counters.
 #[derive(Default)]
 struct Rates {
@@ -317,16 +325,19 @@ impl App {
                             ui.spinner();
                         } else if live {
                             if ui.button("Stop").clicked() {
-                                action = Some((d.ip.clone(), false));
+                                action = Some(Action::Stop(d.ip.clone()));
                             }
                         } else if d.webos {
                             let cast =
                                 egui::Button::new(RichText::new("Cast").strong().color(Color32::WHITE)).fill(ACCENT).min_size(egui::vec2(72.0, 28.0));
                             if ui.add_enabled(self.busy.is_none(), cast).clicked() {
-                                action = Some((d.ip.clone(), true));
+                                action = Some(Action::Cast(d.ip.clone()));
                             }
                         } else {
                             ui.label(RichText::new("Open the link below on the TV").weak().small());
+                        }
+                        if !busy && !live && self.draft.manual_devices.contains(&d.ip) && ui.small_button("Remove").clicked() {
+                            action = Some(Action::Remove(d.ip.clone()));
                         }
                     });
                 });
@@ -338,8 +349,9 @@ impl App {
             });
         }
         match action {
-            Some((ip, true)) => self.cast(ip),
-            Some((ip, false)) => self.stop(ip),
+            Some(Action::Cast(ip)) => self.cast(ip),
+            Some(Action::Stop(ip)) => self.stop(ip),
+            Some(Action::Remove(ip)) => self.draft.manual_devices.retain(|d| d != &ip),
             None => {}
         }
         ui.horizontal(|ui| {
