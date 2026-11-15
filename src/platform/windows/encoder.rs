@@ -188,6 +188,11 @@ impl Encoder {
                 Ok(Event::NeedInput)
             } else if kind == METransformHaveOutput.0 as u32 {
                 self.output()
+            } else if kind == MEError.0 as u32 {
+                // An async MFT reports failures (e.g. a GPU reset) only as this event and then
+                // stops asking for input: fail so the worker restarts the pipeline.
+                let status = ev.GetStatus()?;
+                bail!("encoder failed: {}", windows::core::Error::from_hresult(status))
             } else {
                 Ok(Event::Other)
             }
